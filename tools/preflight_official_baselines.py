@@ -12,13 +12,22 @@ import ast
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 from pr_pilot.baselines.wrappers import ensure_lock_file, pinned_upstream
-from tools.run_official_baselines import _na_command, _protein_command
+
+# When invoked as ``python tools/preflight_official_baselines.py`` the tools
+# directory itself is on sys.path, not a Python package named ``tools``.
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+from run_official_baselines import _na_command, _protein_command  # noqa: E402
 
 
 def _head(path: Path) -> str:
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip()
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=path, text=True
+    ).strip()
 
 
 def _argparse_flags(script: Path) -> set[str]:
@@ -31,7 +40,11 @@ def _argparse_flags(script: Path) -> set[str]:
         if not isinstance(func, ast.Attribute) or func.attr != "add_argument":
             continue
         for arg in node.args:
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith("--"):
+            if (
+                isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and arg.value.startswith("--")
+            ):
                 flags.add(arg.value)
     return flags
 
@@ -57,7 +70,9 @@ def _assert_na_config(path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, default=Path("."))
-    parser.add_argument("--third-party-root", type=Path, default=Path("third_party/checkouts"))
+    parser.add_argument(
+        "--third-party-root", type=Path, default=Path("third_party/checkouts")
+    )
     parser.add_argument("--prepared", type=Path, required=True)
     args = parser.parse_args()
 
@@ -90,25 +105,39 @@ def main() -> None:
         epochs=1,
         examples_per_epoch=1,
     )
-    passed_flags = {x for x in command if isinstance(x, str) and x.startswith("--")}
-    wrapper_flags = {"--seed", "--script", "--deterministic-empty-numpy-seed"}
+    passed_flags = {
+        x for x in command if isinstance(x, str) and x.startswith("--")
+    }
+    wrapper_flags = {
+        "--seed",
+        "--script",
+        "--deterministic-empty-numpy-seed",
+    }
     upstream_passed = passed_flags - wrapper_flags
     unsupported = sorted(upstream_passed - flags)
     if unsupported:
         raise ValueError(f"Unsupported ProteinMPNN training flags: {unsupported}")
     if str(prepared / "proteinmpnn" / "pdb") in command:
-        raise AssertionError("ProteinMPNN data root incorrectly points to pdb/ child")
+        raise AssertionError(
+            "ProteinMPNN data root incorrectly points to pdb/ child"
+        )
 
     na_script = na_repo / "na_run.py"
     source = na_script.read_text(encoding="utf-8")
     if "JSON = sys.argv[1]" not in source:
-        raise RuntimeError("Pinned NA-MPNN entrypoint contract changed; inspect before running")
+        raise RuntimeError(
+            "Pinned NA-MPNN entrypoint contract changed; inspect before running"
+        )
     na_command = _na_command(repo_root, na_repo, na_cfg, seed=1)
     separator = na_command.index("--")
     if na_command[separator + 1 :] != [str(na_cfg)]:
-        raise AssertionError("NA-MPNN training must receive exactly one positional JSON")
+        raise AssertionError(
+            "NA-MPNN training must receive exactly one positional JSON"
+        )
     if "+'last.pt'" not in source and '+\"last.pt\"' not in source:
-        raise RuntimeError("Pinned NA-MPNN checkpoint contract changed; last.pt not found")
+        raise RuntimeError(
+            "Pinned NA-MPNN checkpoint contract changed; last.pt not found"
+        )
 
     report = {
         "ProteinMPNN_commit": protein_spec.commit,
