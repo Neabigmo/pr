@@ -1,27 +1,10 @@
-"""Local structure adapter boundary.
-
-This is the only intentionally installation-specific module. The pilot must not
-hard-code paths from one machine into scientific code. Implementations should
-parse the frozen manifest's `structure_path` and return tensors matching
-`docs/IMPLEMENTATION_CONTRACT.md`.
-
-A correct adapter should be able to support:
-  - ordinary protein-only samples;
-  - ordinary RNA-only samples;
-  - protein-RNA biological-assembly mother samples;
-  - deterministic coordinate noise;
-  - sparse PP/RR/PR graphs;
-  - interface masks;
-  - rich PR geometry;
-  - fixed/designable masks.
-"""
+"""Structure-adapter contracts shared by Gemmi parsing, training and inference."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Sequence
 
-import torch
 from torch import Tensor
 
 from pr_pilot.model.dmicf import PRBatch
@@ -36,6 +19,28 @@ class PolymerGraph:
     interface: Tensor
     valid: Tensor
     fixed: Tensor
+    reference_xyz: Tensor
+    chain_index: Tensor
+    residue_ids: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        n = int(self.node_x.shape[0])
+        for name, value in {
+            "sequence": self.sequence,
+            "interface": self.interface,
+            "valid": self.valid,
+            "fixed": self.fixed,
+            "reference_xyz": self.reference_xyz,
+            "chain_index": self.chain_index,
+        }.items():
+            if value.shape[0] != n:
+                raise ValueError(f"{name} length {value.shape[0]} != node count {n}")
+        if self.edge_index.ndim != 2 or self.edge_index.shape[0] != 2:
+            raise ValueError("edge_index must have shape [2,E]")
+        if self.edge_x.shape[0] != self.edge_index.shape[1]:
+            raise ValueError("edge_x must align with edge_index")
+        if self.reference_xyz.shape != (n, 3):
+            raise ValueError("reference_xyz must be [N,3]")
 
 
 @dataclass
@@ -44,33 +49,28 @@ class ComplexTensorSample:
     protein: PolymerGraph
     rna: PolymerGraph
     pr: PRBatch
-    metadata: dict
+    metadata: dict = field(default_factory=dict)
+
+    def validate(self) -> None:
+        self.protein.validate()
+        self.rna.validate()
+        e = int(self.pr.protein_index.shape[0])
+        if self.pr.rna_index.shape[0] != e or self.pr.edge_features.shape[0] != e or self.pr.effective_distance.shape[0] != e:
+            raise ValueError("PR tensors must share edge dimension")
+        if e:
+            if int(self.pr.protein_index.max()) >= self.protein.node_x.shape[0]:
+                raise ValueError("PR protein index out of range")
+            if int(self.pr.rna_index.max()) >= self.rna.node_x.shape[0]:
+                raise ValueError("PR RNA index out of range")
 
 
 class StructureAdapter(Protocol):
-    def load_protein(self, structure_path: Path, sample_id: str) -> PolymerGraph: ...
-    def load_rna(self, structure_path: Path, sample_id: str) -> PolymerGraph: ...
-    def load_complex(self, structure_path: Path, sample_id: str) -> ComplexTensorSample: ...
-
-
-class UnconfiguredLocalAdapter:
-    """Deliberate fail-fast default.
-
-    Replace this class with the user's actual mmCIF/PDB parser integration. Do not
-    modify model code to accommodate ad-hoc local file formats; normalize here.
-    """
-
-    def _fail(self, kind: str, structure_path: Path, sample_id: str):
-        raise NotImplementedError(
-            f"Local {kind} structure adapter is not configured for sample {sample_id} at {structure_path}. "
-            "Implement StructureAdapter using Gemmi and the contracts in docs/IMPLEMENTATION_CONTRACT.md."
-        )
-
-    def load_protein(self, structure_path: Path, sample_id: str) -> PolymerGraph:
-        self._fail("protein", structure_path, sample_id)
-
-    def load_rna(self, structure_path: Path, sample_id: str) -> PolymerGraph:
-        self._fail("RNA", structure_path, sample_id)
-
-    def load_complex(self, structure_path: Path, sample_id: str) -> ComplexTensorSample:
-        self._fail("complex", structure_path, sample_id)
+    def load_protein(self, structure_path: Path, sample_id: str, chains: Sequence[str] | None = None) -> PolymerGraph: ...
+    def load_rna(self, structure_path: Path, sample_id: str, chains: Sequence[str] | None = None) -> PolymerGraph: ...
+    def load_complex(
+        self,
+        structure_path: Path,
+        sample_id: str,
+        protein_chains: Sequence[str] | None = None,
+        rna_chains: Sequence[str] | None = None,
+    ) -> ComplexTensorSample: ...
