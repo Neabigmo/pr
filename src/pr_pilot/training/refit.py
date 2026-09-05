@@ -1,10 +1,10 @@
 """Validation-free final refit on all 1,000 frozen development structures.
 
-Epoch counts are selected on the 900/100 development split. Refit then replays
-exactly that many epochs on the full development pool, but crucially keeps the
-original development schedule horizon. Curriculum, gradual unfreezing, task
-ratios and cosine decay therefore replay the selected prefix rather than being
-compressed to 0->100% over the shorter selected epoch count.
+Epoch counts are selected on the 900/100 development split. Refit replays exactly
+that many epochs on the full development pool while retaining the original
+development schedule horizon. A JOINT stage with no initialization checkpoint is
+by definition the scratch control and is fully trainable from step 0; pretrained
+primary joint refits replay gradual unfreezing.
 """
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ import numpy as np
 import torch
 
 from pr_pilot.runtime.manifest_dataset import ManifestTable
-from pr_pilot.training.engine import _adapter, _autocast, _cosine_schedule, _one_training_loss, build_model_from_config
-from pr_pilot.training.stages import Stage, apply_joint_unfreezing, build_optimizer, configure_stage, trainable_parameter_report
+from pr_pilot.training.engine import _adapter, _autocast, _cosine_schedule, _joint_unfreezing_mode, _one_training_loss, build_model_from_config
+from pr_pilot.training.stages import Stage, apply_joint_unfreezing, build_optimizer, configure_stage, make_joint_fully_trainable, trainable_parameter_report
 
 
 STAGE_ORDER = [Stage.PROTEIN_PRIOR, Stage.RNA_PRIOR, Stage.GLOBAL_C, Stage.DELTA_C, Stage.ALPHA, Stage.JOINT]
@@ -31,7 +31,6 @@ def selected_epoch_count(best_checkpoint: Path) -> int:
 
 
 def schedule_horizon_epochs(cfg: dict, stage: Stage) -> int:
-    """Return the development max-epoch horizon used by all epoch-level schedules."""
     return int(cfg["training_stages"][stage.value].get("max_epochs", cfg["optimization"].get("max_epochs_default", 100)))
 
 
@@ -49,7 +48,6 @@ def _optimizer(model, stage: Stage, cfg: dict):
 
 
 def refit_stage(cfg: dict, stage: Stage, manifest_path: Path, epochs: int, out_dir: Path, init_checkpoint: Path | None = None, device: str | None = None) -> Path:
-    """Train exactly selected ``epochs`` while replaying the development schedule prefix."""
     if epochs <= 0:
         raise ValueError("Refit epochs must be positive")
     horizon = schedule_horizon_epochs(cfg, stage)
@@ -66,11 +64,18 @@ def refit_stage(cfg: dict, stage: Stage, manifest_path: Path, epochs: int, out_d
         payload = torch.load(init_checkpoint, map_location="cpu")
         model.load_state_dict(payload["model"])
     configure_stage(model, stage)
+    joint_mode = _joint_unfreezing_mode(cfg) if stage == Stage.JOINT else "not_applicable"
+    if stage == Stage.JOINT and init_checkpoint is None:
+        # The component-ladder scratch control must not inherit the pretrained
+        # gradual-unfreezing handicap. Its random encoders, C, DeltaC and alpha
+        # all learn from the first optimization step.
+        joint_mode = "all_trainable_from_start"
+    if stage == Stage.JOINT and joint_mode == "all_trainable_from_start":
+        make_joint_fully_trainable(model, include_global_c=True)
+
     optimizer = _optimizer(model, stage, cfg)
     base_lrs = [float(group["lr"]) for group in optimizer.param_groups]
     table = ManifestTable(manifest_path)
-    # Preserve the normalized cosine/warmup trajectory from development. Using
-    # selected epochs here would compress the entire schedule into the refit.
     total_schedule_steps = horizon * max(1, len(table))
     global_step = 0
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -79,11 +84,11 @@ def refit_stage(cfg: dict, stage: Stage, manifest_path: Path, epochs: int, out_d
     for epoch in range(epochs):
         model.train()
         progress = schedule_progress(epoch, horizon)
-        if stage == Stage.JOINT:
+        if stage == Stage.JOINT and joint_mode == "gradual":
             apply_joint_unfreezing(model, progress)
         adapter = _adapter(cfg, epoch, training=True)
         rows = list(table.rows())
-        rng = random.Random(seed + epoch * 104729); rng.shuffle(rows)
+        random.Random(seed + epoch * 104729).shuffle(rows)
         losses = []
         for row in rows:
             optimizer.zero_grad(set_to_none=True)
@@ -93,15 +98,14 @@ def refit_stage(cfg: dict, stage: Stage, manifest_path: Path, epochs: int, out_d
                 raise FloatingPointError(f"Non-finite refit loss stage={stage.value} epoch={epoch} sample={row.sample_id}")
             loss.backward()
             torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad and p.grad is not None], float(cfg["optimization"]["grad_clip_norm"]))
-            optimizer.step()
-            global_step += 1
+            optimizer.step(); global_step += 1
             _cosine_schedule(optimizer, global_step, total_schedule_steps, float(cfg["optimization"]["warmup_fraction"]), base_lrs)
             losses.append(float(loss.detach().cpu()))
         with metrics_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"stage": stage.value, "epoch": epoch, "selected_epoch_count": epochs, "schedule_horizon_epochs": horizon, "schedule_progress": progress, "train_loss": float(np.mean(losses)), "validation_used": False, "trainable": trainable_parameter_report(model)}, sort_keys=True) + "\n")
+            handle.write(json.dumps({"stage": stage.value, "epoch": epoch, "selected_epoch_count": epochs, "schedule_horizon_epochs": horizon, "schedule_progress": progress, "joint_unfreezing_mode": joint_mode, "train_loss": float(np.mean(losses)), "validation_used": False, "trainable": trainable_parameter_report(model)}, sort_keys=True) + "\n")
 
     checkpoint = out_dir / "refit.pt"
-    torch.save({"model": model.state_dict(), "stage": stage.value, "epoch": epochs - 1, "refit": True, "validation_used": False, "manifest": str(manifest_path), "selected_epoch_count": epochs, "schedule_horizon_epochs": horizon, "schedule_progress_at_stop": schedule_progress(epochs - 1, horizon), "config": cfg}, checkpoint)
+    torch.save({"model": model.state_dict(), "stage": stage.value, "epoch": epochs - 1, "refit": True, "validation_used": False, "manifest": str(manifest_path), "selected_epoch_count": epochs, "schedule_horizon_epochs": horizon, "schedule_progress_at_stop": schedule_progress(epochs - 1, horizon), "joint_unfreezing_mode": joint_mode, "config": cfg}, checkpoint)
     return checkpoint
 
 

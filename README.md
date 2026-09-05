@@ -1,151 +1,142 @@
 # PR Mini-Pilot
 
-A strict, reproducible small-scale pilot for fixed-backbone protein/RNA inverse folding and joint protein–RNA co-design.
+A strict, reproducible pilot for fixed-backbone Protein/RNA inverse folding and joint Protein–RNA sequence design.
 
-The pilot is deliberately designed to be **small in data volume but complete in scientific logic**. It rehearses the full future study using:
+## Frozen scientific question
 
-- **1,000 frozen protein structures**;
-- **1,000 frozen RNA structures**;
-- **1,100 experimental protein–RNA complexes**, split once into 1,000 development complexes and 100 untouched final test complexes.
-
-## Primary experiments
-
-### Baseline A — ProteinMPNN
-
-Official upstream: `dauparas/ProteinMPNN`.
-
-Train from random initialization on the same frozen protein pool used for our protein structural prior.
-
-### Baseline B — MPNN-fixbb / NA-MPNN RNA
-
-Official reproducible upstream: `baker-laboratory/NA-MPNN`.
-
-Train from random initialization on the same frozen RNA pool used for our RNA structural prior.
-
-### Our method — DM-ICF
-
-Core hypothesis:
+The pilot tests whether Protein–RNA co-design benefits from an explicit decomposition
 
 ```text
 sequence preference
-=
-intramolecular structural prior
-+
-local cross-molecular selection
+= intramolecular structural prior
++ cross-molecular selection
 ```
 
-The Dynamic Multiscale Interfacial Compatibility Field is:
+with the DM-ICF field
 
 ```text
 Gamma_ij = alpha_ij * (C + DeltaC_ij)
 ```
 
-where:
+- `C`: randomly initialized learned 20x4 global AA/base compatibility anchor;
+- `DeltaC_ij`: geometry/context-dependent 20x4 residual;
+- `alpha_ij`: learned multi-neighbour relevance.
 
-- `C`: global learned 20×4 amino-acid/nucleotide compatibility matrix, **small-random initialized**;
-- `DeltaC_ij`: context-dependent 20×4 residual generated from rich protein–RNA local geometry;
-- `alpha_ij`: geometry-aware multi-neighbour relevance coefficient.
+Empirical AA/base PMI never initializes the primary model. It is an independent post-hoc validation target.
 
-Empirical AA/base PMI is **not** used to initialize `C`; it is reserved for independent post-hoc biological validation.
+## Pilot scale
 
-## Mandatory training stages
+- 1,000 frozen Protein structures for Protein structural-prior training;
+- 1,000 frozen RNA structures for RNA structural-prior training;
+- 1,100 experimental Protein–RNA complexes;
+  - 1,000 development complexes;
+  - 100 immutable strict bilateral-OOD final-test complexes.
 
-None may be skipped:
+Development uses 900/100 train/validation only to select epoch counts and fixed settings. Final reported checkpoints restart from random initialization and refit on the full 1,000 Protein, 1,000 RNA and 1,000 complex-development pools. Final 100 never tune the model.
 
-```text
-P: protein structural prior
-R: RNA structural prior
-C: global compatibility matrix
-Delta: contextual residual
-Alpha: relational relevance
-Joint: low-LR final coordination
-Inference: mixed random-order decoding + SPIR
+## Current implementation status
+
+Implemented:
+
+- RCSB discovery/download and coordinate screening;
+- canonical residue normalization;
+- MMseqs/Rfam annotation and leakage-safe freezing;
+- Gemmi Protein/RNA/complex tensor adapter;
+- model-independent canonical interface labels from full-heavy-atom 6 A contacts;
+- rich 5 x 12 Protein–RNA atom-pair geometry;
+- Protein and RNA structural priors;
+- Global C, contextual DeltaC and relevance alpha;
+- six-stage training, schedule-preserving full-1,000 refit and true scratch controls;
+- mixed-order joint generation and SPIR;
+- partner-blind/geometry-only/statistical-potential controls;
+- official ProteinMPNN and NA-MPNN input adapters;
+- immutable upstream lock and CPU baseline preflight;
+- final-100 conditional/joint/mechanistic/robustness evaluation;
+- complex-level bootstrap/statistics;
+- five confirmatory hypotheses plus secondary/exploratory registry;
+- Node-24-compatible CI/manual audit.
+
+Not yet claimed as completed science:
+
+- the real 1,000/1,000/1,100 manifests have not yet been downloaded/frozen in this repository;
+- no reported GPU training result exists yet;
+- final-100 metrics therefore do not exist yet.
+
+## External baselines
+
+Primary external references are trained from random initialization on the exact frozen single-molecule pools:
+
+- official `dauparas/ProteinMPNN`, locked in `third_party/LOCK.json`;
+- official `baker-laboratory/NA-MPNN` fixed-backbone RNA route, locked in the same file.
+
+They are **one-sided structural references**: ProteinMPNN does not receive RNA identity, and RNA NA-MPNN does not receive Protein identity. Cross-partner mechanism claims are tested with same-data internal controls, not by pretending the external tasks have identical information.
+
+Before any baseline GPU job run:
+
+```bash
+python tools/preflight_official_baselines.py --clone --out artifacts/preflight/baselines.json
 ```
 
-## Final 100-complex battery
-
-The held-out 100 are used only after configuration freeze. Mandatory tests include:
-
-- Protein/RNA NLL and recovery;
-- interface vs non-interface metrics;
-- conditional Protein and RNA design;
-- partner-scramble DeltaNLL;
-- local counterfactual partner mutation and KL-distance response;
-- learned `C` vs empirical PMI;
-- `DeltaC` geometry dependence;
-- `alpha` entropy/effective-neighbour analysis;
-- coordinate-noise robustness;
-- PR-edge removal robustness;
-- partner-token hiding robustness;
-- decoding-order sensitivity;
-- SPIR ablation;
-- calibration;
-- sequence-collapse/composition audit;
-- full ablation ladder;
-- data-efficiency experiment at 10/25/50/100% complex data;
-- paired bootstrap/statistical tests across complexes.
-
-## Repository map
+## Primary DM-ICF training semantics
 
 ```text
-configs/
-  pilot.yaml                    frozen initial experiment defaults
-
-docs/
-  EXPERIMENT_SPEC.md            complete scientific protocol
-  IMPLEMENTATION_CONTRACT.md    exact tensor/data/stage invariants
-
-src/pr_pilot/
-  data/
-    features.py                 sequence-neutral Protein/RNA feature guards
-    manifest.py                 deterministic 1000/1000/1100 freezing + leakage checks
-  model/
-    dmicf.py                    executable C + DeltaC + alpha implementation
-  training/
-    losses.py                   strict PI/PN/RI/RN normalized losses
-    stages.py                   staged freezing/optimizer contracts
-  baselines/
-    wrappers.py                 official upstream adapters and fairness schema
-  evaluation/
-    battery.py                  mandatory tests, metrics and paired statistics
-  cli.py                        manifest/audit/stage dispatch CLI
-
-tests/
-  test_dmicf_contracts.py       unit tests for scientific invariants
-
-RUNBOOK.md                      end-to-end execution order
-pyproject.toml                  environment and test definition
+Protein prior
+-> RNA prior
+-> Global C only
+-> interaction/q + DeltaC
+-> alpha/relevance only
+-> joint coordination
 ```
 
-## Quick start
+Primary joint coordination keeps `C` frozen. Scratch joint controls have all parameters trainable from step 0. Full-1,000 refit replays the selected prefix of the development schedule instead of compressing the curriculum/unfreezing/cosine schedule.
+
+## Interface definition
+
+Two concepts are deliberately separate:
+
+1. **canonical biological interface**: any Protein/RNA residue pair with full-heavy-atom distance <= 6 A; used for interface loss/metrics/baseline mapping;
+2. **DM-ICF PR graph**: 8 A cutoff + neighbour cap + sequence-neutral atom geometry; used only as the model receptive field.
+
+Changing the PR graph cutoff/cap must not change interface labels.
+
+## Confirmatory hypotheses
+
+Only five hypotheses are primary and share Holm correction:
+
+1. full DM-ICF vs dual structural prior on interface normalized NLL;
+2. full DM-ICF vs partner-blind/geometry-only controls;
+3. contextual field vs C-only;
+4. partner-scramble interface degradation;
+5. high-alpha edge removal vs distance-matched lower-alpha removal.
+
+All other robustness, calibration, PMI, DeltaC, order, SPIR and case-study analyses are secondary or exploratory.
+
+## Recommended execution order
+
+Read `RUNBOOK.md`, then:
 
 ```bash
 pip install -e '.[dev]'
 pytest
-python -m pr_pilot.cli test-registry
+python -m compileall -q src tests tools
+ruff check src tests tools --select E9,F63,F7,F82
+python tools/audit_config_usage.py --config configs/pilot.yaml
+python tools/preflight_official_baselines.py
 ```
 
-Before training, read in order:
+Data download/freeze comes next. Long GPU training is allowed only after the GO/NO-GO gates in `RUNBOOK.md` pass.
 
-1. `docs/EXPERIMENT_SPEC.md`
-2. `docs/IMPLEMENTATION_CONTRACT.md`
-3. `RUNBOOK.md`
+## Repository map
 
-## What is intentionally not faked
+- `configs/pilot.yaml` — primary frozen defaults;
+- `src/pr_pilot/data/` — discovery/screening/clustering/freezing;
+- `src/pr_pilot/runtime/` — manifest-backed Gemmi tensors and canonical interface;
+- `src/pr_pilot/model/` — structural priors + DM-ICF;
+- `src/pr_pilot/training/` — six-stage trainer, controls, refit, loss audits;
+- `src/pr_pilot/inference/` — joint decoder + SPIR;
+- `src/pr_pilot/evaluation/` — final-100 battery/statistics;
+- `tools/` — data/baseline/orchestration/preflight utilities;
+- `tests/` — scientific-contract regression tests;
+- `third_party/LOCK.json` — immutable external baseline SHAs.
 
-The repository does **not** invent local structure paths, pretend a dataset parser exists when it does not, or silently emulate upstream baselines. The model core, stage logic, loss logic, data-freezing contracts and evaluation statistics are executable; the remaining local adapter must connect the user's actual mmCIF/PDB storage layout to the documented tensor contract.
-
-That adapter is the next implementation step once the real 1,000/1,000/1,100 source files are selected.
-
-## Scientific non-negotiables
-
-- final 100 test complexes never participate in tuning;
-- ProteinMPNN/NA-MPNN and DM-ICF use identical frozen source pools for fair comparisons;
-- native Protein side chains and RNA base identity atoms cannot leak into our structural-prior inputs;
-- cross-polymer loss combination is normalized by `log(20)` and `log(4)`;
-- `DeltaC` begins exactly at zero;
-- learned alpha begins exactly from a distance prior;
-- partner scrambling is evaluation-only in the primary model;
-- predicted structures do not silently enter this experimental-only mini-pilot;
-- external structure predictors are evaluators, not ground-truth teachers;
-- a partially run experiment is not labeled a complete pilot.
+The code is a pilot framework, not a fabricated result package: absence of real frozen data or completed training is reported explicitly rather than silently replaced by toy outputs.

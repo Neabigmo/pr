@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Prepare, train and full-1000-refit the two pinned official baselines.
+"""Train and full-1,000-refit the two immutable official baselines.
 
 Fairness policy
 ---------------
-For each predeclared training seed:
-1. train on frozen 900 and select best epoch on frozen 100 validation;
-2. restart from random initialization;
-3. train exactly that fixed epoch/pass count on all frozen 1,000 structures;
-4. never use the final 100 Protein-RNA complexes for model selection.
+For every predeclared seed:
+1. convert the exact frozen 900/100 single-molecule split;
+2. train the pinned upstream implementation from random initialization;
+3. select an epoch/pass count only on the frozen validation split;
+4. restart from random initialization on the full frozen 1,000 structures;
+5. replay the selected epoch/pass count without consulting final-100 complexes.
 
-A one-row duplicated training structure is supplied as a dummy validation set
-for the upstream final-refit loaders. It is never used for optimization or model
-selection; it only satisfies upstream code that expects a non-empty validation
-loader.
+Upstream source files are never edited. ``tools/run_seeded_upstream.py`` seeds the
+process in-memory and then executes the pinned script.
 """
 from __future__ import annotations
 
@@ -44,8 +43,8 @@ def _git(command: list[str], cwd: Path | None = None) -> str:
 def clone_locked(repo_root: Path, third_party_root: Path) -> dict[str, Path]:
     lock = ensure_lock_file(repo_root)
     third_party_root.mkdir(parents=True, exist_ok=True)
-    paths = {}
-    for name in ["ProteinMPNN", "NA-MPNN"]:
+    paths: dict[str, Path] = {}
+    for name in ("ProteinMPNN", "NA-MPNN"):
         spec = pinned_upstream(name, lock)
         destination = third_party_root / ("ProteinMPNN" if name == "ProteinMPNN" else "NA-MPNN")
         if not destination.exists():
@@ -55,8 +54,24 @@ def clone_locked(repo_root: Path, third_party_root: Path) -> dict[str, Path]:
         head = _git(["rev-parse", "HEAD"], destination)
         if head != spec.commit:
             raise RuntimeError(f"{name} checkout mismatch: {head} != {spec.commit}")
+        entrypoint = destination / str(spec.training_entrypoint)
+        if not entrypoint.exists():
+            raise FileNotFoundError(f"Pinned {name} training entrypoint missing: {entrypoint}")
         paths[name] = destination
     return paths
+
+
+def _seeded_upstream(repo_root: Path, seed: int, script: Path, forwarded: list[str]) -> list[str]:
+    return [
+        sys.executable,
+        str(repo_root / "tools" / "run_seeded_upstream.py"),
+        "--seed",
+        str(seed),
+        "--script",
+        str(script),
+        "--",
+        *forwarded,
+    ]
 
 
 def _prepare(
@@ -72,81 +87,73 @@ def _prepare(
         [
             sys.executable,
             str(repo_root / "tools" / "prepare_official_baselines.py"),
-            "--protein-train",
-            str(protein_train),
-            "--protein-val",
-            str(protein_val),
-            "--rna-train",
-            str(rna_train),
-            "--rna-val",
-            str(rna_val),
-            "--out",
-            str(output),
-            "--passes",
-            str(na_passes),
+            "--protein-train", str(protein_train),
+            "--protein-val", str(protein_val),
+            "--rna-train", str(rna_train),
+            "--rna-val", str(rna_val),
+            "--out", str(output),
+            "--passes", str(na_passes),
         ],
         cwd=repo_root,
     )
 
 
 def _protein_command(
+    repo_root: Path,
     repo: Path,
-    data: Path,
+    data_root: Path,
     output: Path,
     seed: int,
     epochs: int,
     examples_per_epoch: int,
 ) -> list[str]:
-    return [
-        sys.executable,
-        str(repo / "training" / "training.py"),
-        "--path_for_training_data",
-        str(data / "pdb"),
-        "--path_for_outputs",
-        str(output),
-        "--path_for_training_clusters",
-        str(data / "list.csv"),
-        "--path_for_valid_clusters",
-        str(data / "valid_clusters.txt"),
-        "--path_for_test_clusters",
-        str(data / "test_clusters.txt"),
-        "--num_epochs",
-        str(epochs),
-        "--save_model_every_n_epochs",
-        "1",
-        "--reload_data_every_n_epochs",
-        "1",
-        "--num_examples_per_epoch",
-        str(examples_per_epoch),
-        "--batch_size",
-        "6000",
-        "--max_protein_length",
-        "1000",
-        "--backbone_noise",
-        "0.1",
-        "--seed",
-        str(seed),
-        "--mixed_precision",
+    """Command exactly matching pinned ProteinMPNN ``training.py`` argparse."""
+    forwarded = [
+        "--path_for_training_data", str(data_root),
+        "--path_for_outputs", str(output),
+        "--num_epochs", str(epochs),
+        "--save_model_every_n_epochs", "1",
+        "--reload_data_every_n_epochs", "1",
+        "--num_examples_per_epoch", str(examples_per_epoch),
+        "--batch_size", "6000",
+        "--max_protein_length", "1000",
+        "--hidden_dim", "128",
+        "--num_encoder_layers", "3",
+        "--num_decoder_layers", "3",
+        "--num_neighbors", "48",
+        "--dropout", "0.1",
+        "--backbone_noise", "0.10",
+        "--rescut", "4.0",
+        "--gradient_norm", "1.0",
+        "--mixed_precision", "True",
     ]
+    return _seeded_upstream(repo_root, seed, repo / "training" / "training.py", forwarded)
 
 
-def _na_command(repo: Path, config: Path, output_root: Path, seed: int) -> list[str]:
-    return [
-        sys.executable,
-        str(repo / "na_run.py"),
-        "--path_for_outputs",
-        str(output_root),
-        "--model_input_json",
-        str(config),
-        "--seed",
-        str(seed),
-    ]
+def _materialize_na_config(template: Path, destination: Path, output_root: Path) -> Path:
+    cfg = json.loads(template.read_text(encoding="utf-8"))
+    cfg["BASE_FOLDER"] = str(output_root.resolve())
+    cfg["PREV_CHECKPOINT"] = ""
+    # Pinned NA-MPNN checks `if total_step > TOTAL_STEPS: break` only after an
+    # epoch. prepare_nampnn estimates exactly batches_per_pass * requested_passes;
+    # subtract one from the stopping threshold so equality at the intended final
+    # batch exits instead of running one unintended extra pass.
+    if "TOTAL_STEPS" in cfg:
+        cfg["TOTAL_STEPS"] = max(0, int(cfg["TOTAL_STEPS"]) - 1)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(cfg, indent=2, sort_keys=True), encoding="utf-8")
+    return destination
+
+
+def _na_command(repo_root: Path, repo: Path, config: Path, seed: int) -> list[str]:
+    """Pinned NA-MPNN ``na_run.py`` consumes exactly one positional JSON file."""
+    return _seeded_upstream(repo_root, seed, repo / "na_run.py", [str(config)])
 
 
 def _best_epoch(log_path: Path, pattern: re.Pattern[str], label: str) -> tuple[int, float]:
     if not log_path.exists():
         raise FileNotFoundError(f"Missing {label} training log: {log_path}")
-    matches = []
+    matches: list[tuple[int, float]] = []
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         match = pattern.search(line)
         if match:
@@ -154,20 +161,6 @@ def _best_epoch(log_path: Path, pattern: re.Pattern[str], label: str) -> tuple[i
     if not matches:
         raise RuntimeError(f"Could not parse validation epochs from {label} log {log_path}")
     return min(matches, key=lambda item: item[1])
-
-
-def _find_single(root: Path, pattern: str) -> Path:
-    candidates = sorted(root.glob(pattern))
-    if len(candidates) != 1:
-        raise RuntimeError(f"Expected one file matching {root}/{pattern}, found {candidates}")
-    return candidates[0]
-
-
-def _latest_checkpoint(root: Path, pattern: str) -> Path:
-    candidates = list(root.glob(pattern))
-    if not candidates:
-        raise FileNotFoundError(f"No checkpoints under {root} matching {pattern}")
-    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def _dummy_validation(pool_path: Path, output: Path) -> Path:
@@ -223,6 +216,7 @@ def run_seed(
     protein_dev = seed_root / "development" / "ProteinMPNN"
     _run(
         _protein_command(
+            repo_root,
             upstream["ProteinMPNN"],
             development_prep / "proteinmpnn",
             protein_dev,
@@ -232,15 +226,16 @@ def run_seed(
         ),
         cwd=upstream["ProteinMPNN"],
     )
-    protein_best_epoch, protein_best_valid = _best_epoch(
-        protein_dev / "log.txt", PROTEIN_BEST_RE, "ProteinMPNN"
-    )
+    protein_best_epoch, protein_best_valid = _best_epoch(protein_dev / "log.txt", PROTEIN_BEST_RE, "ProteinMPNN")
 
-    na_dev_config = development_prep / "na_mpnn" / "na_mpnn_from_scratch.json"
     na_dev = seed_root / "development" / "NA-MPNN"
-    _run(_na_command(upstream["NA-MPNN"], na_dev_config, na_dev, seed), cwd=upstream["NA-MPNN"])
-    na_dev_log = _find_single(na_dev, "*/log.txt")
-    na_best_epoch, na_best_valid = _best_epoch(na_dev_log, NA_BEST_RE, "NA-MPNN")
+    na_dev_cfg = _materialize_na_config(
+        development_prep / "na_mpnn" / "na_mpnn_from_scratch.json",
+        seed_root / "configs" / "na_development.json",
+        na_dev,
+    )
+    _run(_na_command(repo_root, upstream["NA-MPNN"], na_dev_cfg, seed), cwd=upstream["NA-MPNN"])
+    na_best_epoch, na_best_valid = _best_epoch(na_dev / "log.txt", NA_BEST_RE, "NA-MPNN")
 
     dummy_root = seed_root / "refit_dummy_validation"
     protein_dummy = _dummy_validation(manifest_root / "protein_pool.tsv", dummy_root / "protein.tsv")
@@ -259,6 +254,7 @@ def run_seed(
     protein_refit = seed_root / "final_refit_full1000" / "ProteinMPNN"
     _run(
         _protein_command(
+            repo_root,
             upstream["ProteinMPNN"],
             refit_prep / "proteinmpnn",
             protein_refit,
@@ -272,10 +268,16 @@ def run_seed(
     if not protein_final.exists():
         raise FileNotFoundError(protein_final)
 
-    na_refit_config = refit_prep / "na_mpnn" / "na_mpnn_from_scratch.json"
     na_refit = seed_root / "final_refit_full1000" / "NA-MPNN"
-    _run(_na_command(upstream["NA-MPNN"], na_refit_config, na_refit, seed), cwd=upstream["NA-MPNN"])
-    na_final = _latest_checkpoint(na_refit, "*/model_weights/*.pt")
+    na_refit_cfg = _materialize_na_config(
+        refit_prep / "na_mpnn" / "na_mpnn_from_scratch.json",
+        seed_root / "configs" / "na_refit_full1000.json",
+        na_refit,
+    )
+    _run(_na_command(repo_root, upstream["NA-MPNN"], na_refit_cfg, seed), cwd=upstream["NA-MPNN"])
+    na_final = na_refit / "last.pt"
+    if not na_final.exists():
+        raise FileNotFoundError(na_final)
 
     summary = {
         "seed": seed,
@@ -295,6 +297,7 @@ def run_seed(
         },
         "final_test_used_for_selection": False,
     }
+    seed_root.mkdir(parents=True, exist_ok=True)
     (seed_root / "baseline_refit_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
@@ -313,20 +316,10 @@ def main() -> None:
     repo_root = args.repo_root.resolve()
     manifest_root = args.manifest_root.resolve()
     output = args.out.resolve()
-    third_party_root = args.third_party_root.resolve()
     _verify_counts(manifest_root)
-    upstream = clone_locked(repo_root, third_party_root)
-
+    upstream = clone_locked(repo_root, args.third_party_root.resolve())
     summaries = [
-        run_seed(
-            repo_root,
-            manifest_root,
-            upstream,
-            output,
-            int(seed),
-            int(args.max_passes),
-            args.prepare_only,
-        )
+        run_seed(repo_root, manifest_root, upstream, output, int(seed), int(args.max_passes), args.prepare_only)
         for seed in args.seeds
     ]
     output.mkdir(parents=True, exist_ok=True)

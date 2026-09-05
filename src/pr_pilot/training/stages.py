@@ -2,7 +2,9 @@
 
 The primary staged experiment deliberately separates explanatory roles:
 C learns the global compatibility anchor, DeltaC learns contextual corrections,
-alpha learns neighbour relevance, and joint adaptation never moves the C anchor.
+alpha learns neighbour relevance, and primary joint adaptation never moves C.
+Scratch controls are explicitly exempt from pretrained gradual-unfreezing and are
+fully trainable from step 0, including their randomly initialized C matrix.
 """
 from __future__ import annotations
 
@@ -40,7 +42,7 @@ CONTRACTS = {
     Stage.GLOBAL_C: StageContract(Stage.GLOBAL_C, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("predicted_structures", "test_manifest", "learned_delta_c", "learned_alpha")),
     Stage.DELTA_C: StageContract(Stage.DELTA_C, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("test_manifest", "learned_alpha")),
     Stage.ALPHA: StageContract(Stage.ALPHA, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("test_manifest",)),
-    Stage.JOINT: StageContract(Stage.JOINT, "complex_train", ("protein_conditional", "rna_conditional", "joint"), "complex_val_composite_normalized_nll", ("test_manifest",)),
+    Stage.JOINT: StageContract(Stage.JOINT, "complex_train", ("protein_conditional", "rna_conditional", "joint"), "complex_val_conditional_plus_sequential_joint_nll", ("test_manifest",)),
 }
 
 
@@ -50,17 +52,21 @@ def _set_module(module: nn.Module, value: bool) -> None:
 
 
 def _freeze_global_anchor(model: JointPriorAndFieldModel) -> None:
-    """C is a population anchor and must not drift after Stage GLOBAL_C."""
     _set_module(model.dmicf.global_c, False)
+
+
+def make_joint_fully_trainable(model: JointPriorAndFieldModel, include_global_c: bool = True) -> None:
+    """Scratch-control semantics: no pretrained-specific freezing handicap."""
+    for p in model.parameters():
+        p.requires_grad = True
+    if not include_global_c:
+        _freeze_global_anchor(model)
 
 
 def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> dict[str, int]:
     """Release pretrained encoders from output-proximal layers toward inputs.
 
-    Contextual heads, token-context decoders and output heads are trainable from
-    joint step 0. Encoder message/update blocks are released progressively. Raw
-    node/edge projections are released only in the last 20% of joint training.
-    The learned global C anchor remains frozen throughout joint adaptation.
+    Primary joint adaptation freezes the Stage-C global compatibility anchor.
     """
     progress = float(min(max(progress, 0.0), 1.0))
     for module in [model.dmicf, model.protein_decoder, model.rna_decoder, model.protein_head, model.rna_head]:
@@ -86,8 +92,8 @@ def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> d
 def configure_stage(model: JointPriorAndFieldModel, stage: Stage) -> StageContract:
     set_trainable_stage(model, stage.value)
     if stage == Stage.ALPHA:
-        # Alpha is the neighbour-relevance stage. Interaction/DeltaC are already
-        # learned and intentionally frozen so they cannot re-absorb alpha's role.
+        # Interaction/DeltaC have already learned their role. Freeze them and train
+        # only neighbour relevance (score residual + tau) in the primary alpha stage.
         for p in model.parameters():
             p.requires_grad = False
         _set_module(model.dmicf.relevance, True)
@@ -115,7 +121,6 @@ def _group(params: list[nn.Parameter], lr: float, wd: float) -> dict:
 
 
 def _encoder_layer_groups(enc: SimpleSparseBackboneEncoder, top_lr: float, bottom_lr: float, decay: float, wd: float) -> list[dict]:
-    """Layer-wise discriminative LR; includes frozen params for later release."""
     n = len(enc.message)
     groups: list[dict] = []
     for idx in range(n):
@@ -173,6 +178,10 @@ def build_optimizer(
             *_encoder_layer_groups(model.rna_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
             _group([model.dmicf.raw_lambda_p, model.dmicf.raw_lambda_r], lr_projections, 0.0),
         ]
+        # Primary joint keeps C frozen. Scratch controls explicitly mark C
+        # trainable; only then is it added to the optimizer.
+        if model.dmicf.global_c.raw.requires_grad:
+            groups.append(_group([model.dmicf.global_c.raw], lr_heads, 0.0))
     else:
         raise ValueError(stage)
     groups = [g for g in groups if g["params"]]

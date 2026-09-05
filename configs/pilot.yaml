@@ -5,6 +5,7 @@ experiment:
   output_root: artifacts
   fail_on_test_leakage: true
   primary_training_seeds: [20260905, 20260906, 20260907]
+  analysis_seed: 20260905
 
 sampling:
   protein_pool_size: 1000
@@ -32,9 +33,7 @@ structure_filters:
   rna_max_length: 500
   max_total_tokens: 1000
   max_resolution_angstrom: 4.0
-  preferred_resolution_angstrom: 3.5
   allow_nmr_without_resolution: true
-  require_interface_contact: true
   interface_contact_angstrom: 6.0
   min_interfacial_residue_pairs: 3
   max_interface_missing_fraction: 0.10
@@ -45,9 +44,6 @@ leakage:
   require_rfam_holdout_when_available: true
   strict_validation: true
   purge_final_test_from_single_molecule_pretraining: true
-  group_conformers: true
-  group_mutation_series: true
-  group_exact_pair: true
 
 geometry:
   hidden_dim: 256
@@ -80,29 +76,19 @@ masking:
 loss:
   protein_label_smoothing: 0.05
   rna_label_smoothing: 0.05
-  global_c_label_smoothing: 0.0
-  normalize_protein_by_log_alphabet: true
-  normalize_rna_by_log_alphabet: true
-  equalize_interface_noninterface_groups: true
-  equalize_protein_rna_in_joint: true
   c_l2_enabled: false
   c_l2_target_fraction: 0.02
-  delta_c_norm_penalty: 0.0
   alpha_entropy_warmup_weight: 0.01
   alpha_entropy_warmup_fraction: 0.10
 
 optimization:
-  optimizer: adamw
   lr_heads: 0.001
   lr_projections: 0.0005
   lr_encoder_top: 0.0001
   lr_encoder_bottom: 0.00002
-  # Retained for backwards-compatible config parsing only. Primary joint training
-  # never includes C in the optimizer; C is frozen after the GLOBAL_C stage.
   lr_global_c_joint: 0.0
   weight_decay: 0.01
   warmup_fraction: 0.04
-  schedule: cosine
   grad_clip_norm: 1.0
   precision: bf16
   layerwise_lr_decay: 0.85
@@ -120,8 +106,6 @@ training_stages:
     enabled: true
     max_epochs: 80
     conditional_task_ratio: [1, 1]
-    # Primary C is a population/global anchor. Hard-context mining would change
-    # its estimand, so it is disabled in the primary experiment.
     hard_context_fraction_late: 0.0
     lambda_fixed_to_one: true
   delta_c:
@@ -142,7 +126,7 @@ training_stages:
     max_epochs: 150
     task_ratio_start: [2, 2, 1]
     task_ratio_end: [1, 1, 1]
-    gradual_unfreezing: true
+    unfreezing_mode: gradual
     learn_bounded_lambda: true
     freeze_global_c: true
 
@@ -163,8 +147,8 @@ fairness_controls:
 
 inference:
   candidates_per_complex: 64
+  ablation_candidates_per_complex: 16
   initial_temperature: 1.0
-  random_mixed_order: true
   spir:
     enabled: true
     reopen_fraction: 0.30
@@ -175,6 +159,7 @@ inference:
 evaluation:
   statistical_unit: complex
   joint_teacher_forced_orders: 5
+  joint_validation_max_complexes: 20
   scramble_repeats: 20
   counterfactual_max_partner_sites: 16
   geometry_permutation_repeats: 10
@@ -187,16 +172,12 @@ evaluation:
   bootstrap_resamples: 10000
   primary_multiple_testing: holm
   exploratory_multiple_testing: bh
+  primary_hypotheses:
+    - full_vs_dual_prior_interface_nll
+    - full_vs_partner_identity_controls
+    - contextual_vs_global_c
+    - partner_scramble
+    - alpha_edge_removal
   data_efficiency_fractions: [0.10, 0.25, 0.50, 1.00]
-  run_partner_scramble: true
-  run_counterfactual_mutation: true
-  run_pmi_validation: true
-  run_delta_c_analysis: true
-  run_alpha_analysis: true
-  run_alpha_causal_edge_ablation: true
-  run_geometry_permutation_control: true
-  run_calibration: true
-  run_order_sensitivity: true
-  run_spir_ablation: true
-  run_partner_blind_control: true
-  run_capacity_control: true
+  runtime_profile_complexes: 10
+  full_diagnostic_seed: 20260905

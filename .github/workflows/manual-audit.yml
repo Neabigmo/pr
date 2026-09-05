@@ -12,7 +12,7 @@ env:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -27,6 +27,10 @@ jobs:
         run: python -m compileall -q src tests tools
       - name: Scientific contract tests
         run: python -m pytest -q
+      - name: Config usage audit
+        run: python tools/audit_config_usage.py --config configs/pilot.yaml
+      - name: Official baseline wrapper preflight
+        run: python tools/preflight_official_baselines.py
       - name: Correctness lint
         run: ruff check src tests tools --select E9,F63,F7,F82
       - name: CLI smoke tests
@@ -34,6 +38,10 @@ jobs:
           python tools/prepare_baseline_holdout.py --help >/dev/null
           python tools/evaluate_official_baselines.py --help >/dev/null
           python tools/run_official_baselines.py --help >/dev/null
+          python tools/run_seeded_upstream.py --help >/dev/null
+          python tools/preflight_official_baselines.py --help >/dev/null
+          python tools/audit_config_usage.py --help >/dev/null
+          python tools/run_final100.py --help >/dev/null
           python tools/run_internal_controls.py --help >/dev/null
           python tools/run_statistical_controls.py --help >/dev/null
           python tools/run_pilot_experiments.py --help >/dev/null
