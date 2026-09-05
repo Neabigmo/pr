@@ -1,13 +1,14 @@
 """Same-data internal fairness controls for DM-ICF.
 
-``partner_blind`` forces the cross-molecular correction to zero.
+``partner_blind`` removes cross-molecular correction entirely. It starts from the
+same dual structural-prior checkpoint and goes directly through Joint adaptation;
+forcing it through C/Delta/Alpha would create stages with no active gradient.
+
 ``geometry_only`` retains q/DeltaC/alpha capacity and partner geometry but removes
 specific partner-token identity by averaging compatibility across the partner
-alphabet.
+alphabet. It follows C -> Delta -> Alpha -> Joint like the primary interaction path.
 
-Controls share frozen manifests, structural-prior checkpoints, stage ownership,
-validation rules and full-1000 schedule-prefix refit semantics with the primary
-model.
+Both controls use the exact frozen manifests and schedule-prefix full-1000 refit.
 """
 from __future__ import annotations
 
@@ -43,11 +44,11 @@ from pr_pilot.training.stages import (
 )
 
 
-CONTROL_STAGES = [Stage.GLOBAL_C, Stage.DELTA_C, Stage.ALPHA, Stage.JOINT]
+GEOMETRY_CONTROL_STAGES = [Stage.GLOBAL_C, Stage.DELTA_C, Stage.ALPHA, Stage.JOINT]
+PARTNER_BLIND_STAGES = [Stage.JOINT]
 
 
 def install_control_mode(model: JointPriorAndFieldModel, mode: str) -> None:
-    """Replace only cross-molecular output semantics; leave architecture intact."""
     if mode not in {"partner_blind", "geometry_only"}:
         raise ValueError("mode must be partner_blind or geometry_only")
     original = model.forward
@@ -62,12 +63,12 @@ def install_control_mode(model: JointPriorAndFieldModel, mode: str) -> None:
             return out
 
         if len(args) < 7:
-            raise ValueError(
-                "Controlled forward requires the standard positional JointPriorAndFieldModel call"
-            )
+            raise ValueError("Controlled forward requires the standard positional JointPriorAndFieldModel call")
         pr = args[6]
         cedge = out["C"].unsqueeze(0) + out["DeltaC"]
 
+        # Average over partner alphabet: partner geometry and extra network capacity
+        # remain, but the actual partner AA/base identity cannot affect correction.
         p_edge = cedge.mean(dim=-1) * out["alpha_p"][:, None]
         p_delta = torch.zeros_like(out["protein_struct_logits"])
         p_delta.index_add_(0, pr.protein_index, p_edge)
@@ -103,13 +104,14 @@ def _optimizer(model: JointPriorAndFieldModel, stage: Stage, cfg: dict):
     )
 
 
-def _load_control_model(
-    cfg: dict, checkpoint: Path, stage: Stage, mode: str, device: torch.device
-):
+def _load_control_model(cfg: dict, checkpoint: Path, stage: Stage, mode: str, device: torch.device):
     model = build_model_from_config(cfg).to(device)
     payload = torch.load(checkpoint, map_location="cpu")
     model.load_state_dict(payload["model"])
-    configure_stage(model, stage)
+    # Every internal control starts from an actual pretrained checkpoint. This
+    # explicit False prevents zero unused interaction heads in the dual-prior
+    # checkpoint from being mistaken for a scratch model.
+    configure_stage(model, stage, scratch_joint=False if stage == Stage.JOINT else None)
     install_control_mode(model, mode)
     return model
 
@@ -124,8 +126,9 @@ def train_control_stage(
     out_dir: Path,
     device: str | None = None,
 ) -> Path:
-    if stage not in CONTROL_STAGES:
-        raise ValueError(f"Control mode applies only to {CONTROL_STAGES}")
+    allowed = PARTNER_BLIND_STAGES if mode == "partner_blind" else GEOMETRY_CONTROL_STAGES
+    if stage not in allowed:
+        raise ValueError(f"{mode} control stage {stage.value} is invalid; allowed={allowed}")
     seed = int(cfg["experiment"]["pilot_seed"])
     random.seed(seed)
     np.random.seed(seed)
@@ -160,13 +163,9 @@ def train_control_stage(
         for row in rows:
             optimizer.zero_grad(set_to_none=True)
             with _autocast(cfg, dev):
-                loss, _ = _one_training_loss(
-                    model, row, adapter, stage, cfg, epoch, progress, dev
-                )
-            if not torch.isfinite(loss):
-                raise FloatingPointError(
-                    f"Non-finite {mode} loss at {stage.value} {row.sample_id}"
-                )
+                loss, _ = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev)
+            if not torch.isfinite(loss) or not loss.requires_grad:
+                raise FloatingPointError(f"Invalid {mode} loss at {stage.value} {row.sample_id}; requires_grad={loss.requires_grad}")
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad and p.grad is not None],
@@ -174,14 +173,9 @@ def train_control_stage(
             )
             optimizer.step()
             global_step += 1
-            _cosine_schedule(
-                optimizer,
-                global_step,
-                total_steps,
-                float(cfg["optimization"]["warmup_fraction"]),
-                base_lrs,
-            )
+            _cosine_schedule(optimizer, global_step, total_steps, float(cfg["optimization"]["warmup_fraction"]), base_lrs)
             losses.append(float(loss.detach().cpu()))
+
         val = validate_stage(model, stage, val_table, cfg, dev)
         record = {
             "control_mode": mode,
@@ -230,7 +224,6 @@ def refit_control_stage(
     out_dir: Path,
     device: str | None = None,
 ) -> Path:
-    """Validation-free full-1000 refit with the development schedule prefix."""
     epochs = selected_epoch_count(selected_dev_checkpoint)
     horizon = development_schedule_horizon(cfg, stage)
     if epochs > horizon:
@@ -261,9 +254,9 @@ def refit_control_stage(
         for row in rows:
             optimizer.zero_grad(set_to_none=True)
             with _autocast(cfg, dev):
-                loss, _ = _one_training_loss(
-                    model, row, adapter, stage, cfg, epoch, progress, dev
-                )
+                loss, _ = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev)
+            if not loss.requires_grad:
+                raise RuntimeError(f"{mode}/{stage.value} refit produced a detached loss")
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad and p.grad is not None],
@@ -271,13 +264,7 @@ def refit_control_stage(
             )
             optimizer.step()
             global_step += 1
-            _cosine_schedule(
-                optimizer,
-                global_step,
-                total_steps,
-                float(cfg["optimization"]["warmup_fraction"]),
-                base_lrs,
-            )
+            _cosine_schedule(optimizer, global_step, total_steps, float(cfg["optimization"]["warmup_fraction"]), base_lrs)
 
     checkpoint = out_dir / "refit.pt"
     torch.save(
@@ -307,9 +294,10 @@ def run_control_pipeline(
     out_dir: Path,
     device: str | None = None,
 ) -> Path:
+    stages = PARTNER_BLIND_STAGES if mode == "partner_blind" else GEOMETRY_CONTROL_STAGES
     dev_prev = primary_development_prior
     refit_prev = primary_refit_prior
-    for stage in CONTROL_STAGES:
+    for stage in stages:
         dev_stage = out_dir / "development" / stage.value
         dev_checkpoint = train_control_stage(
             cfg,
@@ -334,7 +322,19 @@ def run_control_pipeline(
         )
         dev_prev = dev_checkpoint
         refit_prev = refit_checkpoint
-    (out_dir / "FINAL_REFIT_CHECKPOINT.txt").write_text(
-        str(refit_prev), encoding="utf-8"
+    (out_dir / "FINAL_REFIT_CHECKPOINT.txt").write_text(str(refit_prev), encoding="utf-8")
+    (out_dir / "control_training_protocol.json").write_text(
+        json.dumps(
+            {
+                "mode": mode,
+                "stages": [stage.value for stage in stages],
+                "rationale": (
+                    "partner_blind adapts dual structural priors directly under complex joint masks; "
+                    "geometry_only retains the full interaction-capacity training path without partner-token identity"
+                ),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
     )
     return refit_prev
