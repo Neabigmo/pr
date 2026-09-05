@@ -1,0 +1,42 @@
+name: manual-current-head-audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Compile all Python modules
+        run: python -m compileall -q src tests tools
+      - name: Scientific contract tests
+        run: python -m pytest -q
+      - name: Correctness lint
+        run: ruff check src tests tools --select E9,F63,F7,F82
+      - name: CLI smoke tests
+        run: |
+          python tools/prepare_baseline_holdout.py --help >/dev/null
+          python tools/evaluate_official_baselines.py --help >/dev/null
+          python tools/run_official_baselines.py --help >/dev/null
+          python tools/run_internal_controls.py --help >/dev/null
+          python tools/run_statistical_controls.py --help >/dev/null
+          python tools/run_pilot_experiments.py --help >/dev/null
+          python -m pr_pilot.training.gradient_audit --help >/dev/null
+          python -m pr_pilot.evaluation.full_suite --help >/dev/null
+          python -m pr_pilot.evaluation.compare_runs --help >/dev/null
