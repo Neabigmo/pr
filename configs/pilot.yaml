@@ -19,7 +19,7 @@ sampling:
   complex_train: 900
   complex_val: 100
   final_refit_on_full_dev: true
-  final_refit_rule: "use validation-selected epoch count; no further hyperparameter selection"
+  final_refit_rule: "use validation-selected epoch count and replay the same development schedule prefix; no further selection"
   forbid_predicted_structures: true
 
 structure_filters:
@@ -32,9 +32,7 @@ structure_filters:
   rna_max_length: 500
   max_total_tokens: 1000
   max_resolution_angstrom: 4.0
-  preferred_resolution_angstrom: 3.5
   allow_nmr_without_resolution: true
-  require_interface_contact: true
   interface_contact_angstrom: 6.0
   min_interfacial_residue_pairs: 3
   max_interface_missing_fraction: 0.10
@@ -45,8 +43,6 @@ leakage:
   require_rfam_holdout_when_available: true
   strict_validation: true
   purge_final_test_from_single_molecule_pretraining: true
-  group_conformers: true
-  group_mutation_series: true
   group_exact_pair: true
 
 geometry:
@@ -70,8 +66,6 @@ masking:
   min_fraction: 0.10
   max_fraction: 1.00
   curriculum: true
-  # Exact 100% masking must appear with non-zero probability; a continuous
-  # Uniform(0.1,1.0) draw would otherwise almost never produce full-mask input.
   full_mask_probability: 0.15
   random_mask_probability: 0.70
   local_patch_probability: 0.30
@@ -87,8 +81,6 @@ loss:
   normalize_rna_by_log_alphabet: true
   equalize_interface_noninterface_groups: true
   equalize_protein_rna_in_joint: true
-  # Primary C learning does not need an adaptive L2 term; keep this disabled.
-  # If studied later, use a fixed coefficient selected on development data only.
   c_l2_enabled: false
   c_l2_target_fraction: 0.02
   delta_c_norm_penalty: 0.0
@@ -101,6 +93,8 @@ optimization:
   lr_projections: 0.0005
   lr_encoder_top: 0.0001
   lr_encoder_bottom: 0.00002
+  # Primary joint keeps global C frozen. This LR is retained only for the
+  # explicit scratch all-trainable control, where the orchestrator overrides it.
   lr_global_c_joint: 0.00001
   weight_decay: 0.01
   warmup_fraction: 0.04
@@ -122,9 +116,8 @@ training_stages:
     enabled: true
     max_epochs: 80
     conditional_task_ratio: [1, 1]
-    # In the later half of C learning, 20% of samples use the most structurally
-    # surprising interface positions; partner scrambling remains evaluation-only.
-    hard_context_fraction_late: 0.20
+    # Primary global anchor is population-weighted, not hard-example weighted.
+    hard_context_fraction_late: 0.0
     lambda_fixed_to_one: true
   delta_c:
     enabled: true
@@ -138,6 +131,7 @@ training_stages:
     zero_init_score_residual: true
     hard_context_fraction_late: 0.0
     lambda_fixed_to_one: true
+    freeze_interaction_and_delta: true
   joint:
     enabled: true
     max_epochs: 150
@@ -145,11 +139,9 @@ training_stages:
     task_ratio_end: [1, 1, 1]
     gradual_unfreezing: true
     learn_bounded_lambda: true
+    freeze_global_c: true
 
 fairness_controls:
-  # Primary evidence for DM-ICF comes from same-data internal controls. External
-  # ProteinMPNN/NA-MPNN runs are important references but do not receive partner
-  # identity, so they are not the sole causal controls for DM-ICF.
   partner_blind_complex_control: true
   no_partner_identity_capacity_control: true
   global_c_backbone_only_context_control: true
@@ -177,6 +169,11 @@ inference:
 
 evaluation:
   statistical_unit: complex
+  # Checkpoint-selection metric: fixed deterministic validation subset and orders.
+  joint_validation_orders: 3
+  joint_validation_max_complexes: 32
+  # Final teacher-forced joint metric uses all test complexes; order count may be
+  # larger because it is run only once per final checkpoint.
   joint_teacher_forced_orders: 5
   scramble_repeats: 20
   counterfactual_max_partner_sites: 16
@@ -191,12 +188,30 @@ evaluation:
   primary_multiple_testing: holm
   exploratory_multiple_testing: bh
   data_efficiency_fractions: [0.10, 0.25, 0.50, 1.00]
+
+  # Compute budget is pre-registered before final100 is inspected.
+  analysis_seed: 20260905
+  tier_a_all_seeds_all_complexes: true
+  tier_b_full_battery_analysis_seed_only: true
+  primary_candidate_budget: 64
+  ablation_candidate_budget: 16
+  runtime_profile_complexes: 10
+
+  # Confirmatory family kept deliberately small; all other analyses are secondary
+  # or exploratory and do not enter the primary Holm family.
+  primary_hypotheses:
+    - H1_full_vs_dual_prior_interface_normalized_nll
+    - H2_full_vs_partner_blind_and_geometry_only
+    - H3_contextual_field_vs_global_C_only
+    - H4_partner_scramble_interface_delta_nll
+    - H5_alpha_top_edge_vs_distance_matched_edge_removal
+
   run_partner_scramble: true
   run_counterfactual_mutation: true
   run_pmi_validation: true
   run_delta_c_analysis: true
   run_alpha_analysis: true
-  run_alpha_causal_edge_ablation: true
+  run_alpha_edge_ablation: true
   run_geometry_permutation_control: true
   run_calibration: true
   run_order_sensitivity: true
