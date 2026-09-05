@@ -10,6 +10,13 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+# Rapid scientific development can create many commits in minutes. Only the
+# newest run on a branch is scientifically relevant; older runs are cancelled
+# instead of filling the Actions page with stale failures/queues.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
@@ -29,17 +36,8 @@ jobs:
       - name: Unit tests
         run: python -m pytest
 
-      # Blocking lint is intentionally limited to correctness-critical classes:
-      # syntax errors, invalid control flow and undefined names. These indicate
-      # code that can genuinely fail at runtime and therefore must keep CI red.
+      # Blocking lint is correctness-only while the research code is changing
+      # rapidly. Full formatting/style cleanup belongs to a release-prep pass,
+      # not to the scientific correctness gate.
       - name: Ruff correctness
         run: ruff check src tests tools --select E9,F63,F7,F82
-
-      # The repository is undergoing rapid scientific prototyping and still has
-      # style/cleanup debt (for example compact statements and unused imports).
-      # Keep the complete Ruff report visible without conflating style debt with
-      # a broken scientific implementation. This should be made blocking after
-      # a dedicated formatting/cleanup pass.
-      - name: Ruff full style audit
-        continue-on-error: true
-        run: ruff check src tests tools --output-format=github
