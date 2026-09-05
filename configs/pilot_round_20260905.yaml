@@ -1,5 +1,5 @@
 experiment:
-  name: dmicf_mini_pilot
+  name: dmicf_round_20260905_exception
   pilot_seed: 20260905
   strict_mode: true
   output_root: artifacts
@@ -14,9 +14,9 @@ sampling:
   rna_pool_size: 1000
   rna_train: 900
   rna_val: 100
-  complex_pool_size: 1100
+  complex_pool_size: 1095
   complex_dev: 1000
-  complex_test: 100
+  complex_test: 95
   complex_train: 900
   complex_val: 100
   final_refit_on_full_dev: true
@@ -24,17 +24,17 @@ sampling:
   forbid_predicted_structures: true
 
 structure_filters:
+  protein_min_length: 40
+  protein_max_length: 2000
+  rna_min_length: 10
+  rna_max_length: 500
+  apply_resolution_method_filter: false
   exclude_ribosome: true
   exclude_spliceosome: true
   require_biological_assembly: true
-  protein_min_length: 30
-  protein_max_length: 1000
-  rna_min_length: 5
-  rna_max_length: 500
   max_total_tokens: 1000
   max_resolution_angstrom: 4.0
   allow_nmr_without_resolution: true
-  apply_resolution_method_filter: true
   interface_contact_angstrom: 6.0
   min_interfacial_residue_pairs: 3
   max_interface_missing_fraction: 0.10

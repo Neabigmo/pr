@@ -75,6 +75,11 @@ Keep download failures and checksums. Do not silently substitute a different str
 
 ## 4. Coordinate-level screening
 
+The formal pilot uses the strict resolution/method rule described below. The
+temporary 2026-09-05 execution exception is documented separately in
+`docs/ROUND_20260905_SCREENING_EXCEPTION.md` and must not be treated as the
+`pilot_v1` protocol.
+
 ```bash
 python -m pr_pilot.cli screen --kind protein --config configs/pilot.yaml --download-manifest data/raw/protein/download_manifest.tsv --out data/screened/protein
 python -m pr_pilot.cli screen --kind rna --config configs/pilot.yaml --download-manifest data/raw/rna/download_manifest.tsv --out data/screened/rna

@@ -78,6 +78,11 @@ If screening produces fewer eligible candidates than required after strict-test 
 
 ## 3. Coordinate-level screening
 
+For the temporary 2026-09-05 execution exception, see
+[`ROUND_20260905_SCREENING_EXCEPTION.md`](ROUND_20260905_SCREENING_EXCEPTION.md).
+The exception is isolated in a separate configuration and does not change the
+formal `pilot_v1` screening contract below.
+
 ```bash
 mkdir -p data/screened/{protein,rna,complex}
 
