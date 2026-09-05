@@ -1,3 +1,6 @@
+<!-- REVIEW4-ROUTING-2026-09-05 -->
+> **Review-4 routing notice (2026-09-05).** See [INDEX_REVIEW4.md](INDEX_REVIEW4.md) and the Review-4 runbook for updated contracts, known incompatibilities and outstanding integration gates. The original text below is preserved as historical context; it is not a claim that the new protocol or real experiments have passed.
+
 # PR mini-pilot — post-audit implementation and fairness report
 
 **Purpose.** This document records the repository self-audit requested before any expensive GPU experiment starts. It distinguishes (1) scientific design, (2) executable implementation, (3) external-reference comparisons, and (4) deliberately deferred full-scale engineering features.

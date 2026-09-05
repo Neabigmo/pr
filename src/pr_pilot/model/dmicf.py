@@ -191,12 +191,68 @@ class PRBatch:
     effective_distance: Tensor
     edge_batch: Tensor | None = None
 
-    def validate(self) -> None:
+    def validate(self, n_protein: int | None = None, n_rna: int | None = None,
+                 *, check_values: bool = False) -> None:
         e = int(self.protein_index.numel())
         if self.protein_index.ndim != 1 or self.rna_index.ndim != 1:
             raise ValueError("PR indices must be 1D")
+        if self.protein_index.dtype != torch.long or self.rna_index.dtype != torch.long:
+            raise ValueError("PR indices must use int64")
+        if self.edge_features.ndim != 2 or self.effective_distance.ndim != 1:
+            raise ValueError("PR edge features must be [E,F] and distances [E]; broadcasting is forbidden")
+        if not self.edge_features.is_floating_point() or not self.effective_distance.is_floating_point():
+            raise ValueError("PR geometry must be floating point")
         if self.rna_index.numel() != e or self.edge_features.shape[0] != e or self.effective_distance.numel() != e:
             raise ValueError("PR tensors must share edge dimension")
+        tensors = [self.protein_index, self.rna_index, self.edge_features, self.effective_distance]
+        if len({tensor.device for tensor in tensors}) != 1:
+            raise ValueError("PR tensors must be on one device")
+        for index, size in [(self.protein_index, n_protein), (self.rna_index, n_rna)]:
+            if size is not None and ((index < 0).any() or (index >= size).any()):
+                raise ValueError("PR index is outside its polymer graph")
+        if self.edge_batch is not None and (self.edge_batch.shape != (e,) or self.edge_batch.dtype != torch.long):
+            raise ValueError("edge_batch must be int64 [E]")
+        if check_values and (not torch.isfinite(self.edge_features).all()
+                             or not torch.isfinite(self.effective_distance).all()
+                             or (self.effective_distance < 0).any()):
+            raise ValueError("PR geometry must be finite and distances nonnegative")
+
+
+@dataclass(frozen=True)
+class InferenceGeometryCache:
+    """Call-scoped, sequence-neutral cache. Not a checkpoint or a decoder cache.
+
+    Build only in evaluation mode and discard after geometry, parameters, device,
+    precision/autocast context, or ablation switches change. Token/known-mask
+    changes are allowed. Tensor versions detect ordinary in-place mutations;
+    mutations through ``.data`` are unsupported. The sampler never persists this
+    cache across calls or shares it with training.
+    """
+    model_id: int
+    parameter_signature: tuple
+    geometry_signature: tuple
+    hp: Tensor
+    hr: Tensor
+    field: dict[str, Tensor]
+    pr: PRBatch
+    protein_edge_index: Tensor
+    protein_edge_x: Tensor
+    rna_edge_index: Tensor
+    rna_edge_x: Tensor
+    geometry_tensors: tuple[Tensor, ...]
+
+
+def _tensor_signature(tensors) -> tuple:
+    signature = []
+    for tensor in tensors:
+        try:
+            version = tensor._version
+        except RuntimeError:
+            # Tensors constructed inside inference_mode have no version counter.
+            version = None
+        signature.append((id(tensor), tensor.data_ptr(), version,
+                          str(tensor.device), str(tensor.dtype), tuple(tensor.shape)))
+    return tuple(signature)
 
 
 class CrossInteractionEncoder(nn.Module):
@@ -216,7 +272,7 @@ class CrossInteractionEncoder(nn.Module):
         self.norm = nn.LayerNorm(edge_hidden)
 
     def forward(self, hp: Tensor, hr: Tensor, pr: PRBatch) -> Tensor:
-        pr.validate()
+        pr.validate(n_protein=hp.shape[0], n_rna=hr.shape[0])
         p = self.p_proj(hp[pr.protein_index])
         r = self.r_proj(hr[pr.rna_index])
         e = self.e_proj(pr.edge_features)
@@ -494,6 +550,74 @@ class JointPriorAndFieldModel(nn.Module):
         hc = self.rna_decoder(h, edge_index, edge_x, tokens, known)
         return self.rna_head(hc), h
 
+    @torch.no_grad()
+    def prepare_inference_cache(
+        self,
+        protein_node_x: Tensor,
+        protein_edge_index: Tensor,
+        protein_edge_x: Tensor,
+        rna_node_x: Tensor,
+        rna_edge_index: Tensor,
+        rna_edge_x: Tensor,
+        pr: PRBatch,
+        use_delta: bool = True,
+        learned_alpha: bool = True,
+    ) -> InferenceGeometryCache:
+        """Compute token-independent backbones/field once, never in training."""
+        if any(module.training for module in self.modules()):
+            raise RuntimeError("Inference cache requires every module in eval mode")
+        hp, hr = self.encode_backbones(
+            protein_node_x, protein_edge_index, protein_edge_x,
+            rna_node_x, rna_edge_index, rna_edge_x,
+        )
+        field = self.dmicf.field(hp, hr, pr, use_delta, learned_alpha)
+        geometry = (protein_node_x, protein_edge_index, protein_edge_x,
+                    rna_node_x, rna_edge_index, rna_edge_x, pr.protein_index,
+                    pr.rna_index, pr.edge_features, pr.effective_distance)
+        return InferenceGeometryCache(
+            id(self), _tensor_signature(self.parameters()),
+            _tensor_signature(geometry), hp, hr, field, pr,
+            protein_edge_index, protein_edge_x, rna_edge_index, rna_edge_x, geometry,
+        )
+
+    @torch.no_grad()
+    def decode_cached(
+        self,
+        cache: InferenceGeometryCache,
+        protein_tokens: Tensor,
+        rna_tokens: Tensor,
+        protein_known: Tensor,
+        rna_known: Tensor,
+    ) -> dict[str, Tensor]:
+        """Recompute sequence context on every step; reuse only static geometry."""
+        if any(module.training for module in self.modules()):
+            raise RuntimeError("Cached decoding is evaluation-only")
+        if cache.model_id != id(self) or cache.parameter_signature != _tensor_signature(self.parameters()):
+            raise RuntimeError("Stale inference cache: model parameters changed")
+        current_geometry = (cache.geometry_tensors[:6] +
+                            (cache.pr.protein_index, cache.pr.rna_index,
+                             cache.pr.edge_features, cache.pr.effective_distance))
+        if cache.geometry_signature != _tensor_signature(current_geometry):
+            raise RuntimeError("Stale inference cache: geometry changed")
+        hp, hr, field, pr = cache.hp, cache.hr, cache.field, cache.pr
+        hp_ctx = self.protein_decoder(hp, cache.protein_edge_index, cache.protein_edge_x,
+                                      protein_tokens, protein_known)
+        hr_ctx = self.rna_decoder(hr, cache.rna_edge_index, cache.rna_edge_x,
+                                  rna_tokens, rna_known)
+        zp_struct = self.protein_head(hp_ctx)
+        zr_struct = self.rna_head(hr_ctx)
+        zp_delta = self.dmicf.protein_correction(field, pr, rna_tokens, rna_known, hp.shape[0])
+        zr_delta = self.dmicf.rna_correction(field, pr, protein_tokens, protein_known, hr.shape[0])
+        return {
+            "protein_hidden": hp, "rna_hidden": hr,
+            "protein_context_hidden": hp_ctx, "rna_context_hidden": hr_ctx,
+            "protein_struct_logits": zp_struct, "rna_struct_logits": zr_struct,
+            "protein_delta_logits": zp_delta, "rna_delta_logits": zr_delta,
+            "protein_logits": zp_struct + zp_delta,
+            "rna_logits": zr_struct + zr_delta,
+            **field,
+        }
+
     def forward(
         self,
         protein_node_x: Tensor,
@@ -555,7 +679,8 @@ def set_trainable_stage(
     elif stage == "delta_c":
         modules = [model.dmicf.interaction, model.dmicf.delta]
     elif stage == "alpha":
-        modules = [model.dmicf.interaction, model.dmicf.delta, model.dmicf.relevance]
+        # The low-level API must agree with training.stages.configure_stage.
+        modules = [model.dmicf.relevance]
     elif stage == "joint":
         modules = [model]
     else:
@@ -563,3 +688,7 @@ def set_trainable_stage(
     for module in modules:
         for parameter in module.parameters():
             parameter.requires_grad = True
+    if stage == "joint":
+        # Primary semantics. Scratch controls explicitly call
+        # make_joint_fully_trainable(..., include_global_c=True).
+        model.dmicf.global_c.raw.requires_grad = False

@@ -1,3 +1,6 @@
+<!-- REVIEW4-ROUTING-2026-09-05 -->
+> **Review-4 routing notice (2026-09-05).** See [INDEX_REVIEW4.md](INDEX_REVIEW4.md) and the Review-4 runbook for updated contracts, known incompatibilities and outstanding integration gates. The original text below is preserved as historical context; it is not a claim that the new protocol or real experiments have passed.
+
 # Implementation Contract — exact tensors, adapters and training invariants
 
 This document is the bridge between the scientific specification and executable local data code. Any Codex/agent implementation must conform to these contracts.

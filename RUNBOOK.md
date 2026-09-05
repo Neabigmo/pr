@@ -1,3 +1,6 @@
+<!-- REVIEW4-ROUTING-2026-09-05 -->
+> **Review-4 routing notice (2026-09-05).** See [docs/INDEX_REVIEW4.md](docs/INDEX_REVIEW4.md) and the Review-4 runbook for updated contracts, known incompatibilities and outstanding integration gates. The original text below is preserved as historical context; it is not a claim that the new protocol or real experiments have passed.
+
 # PR Mini-Pilot Runbook
 
 This is the canonical execution order. Old one-off commands are not authoritative.
