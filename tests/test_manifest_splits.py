@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from pr_pilot.data.manifest import bilateral_group_split, assert_no_test_leakage, assert_pretraining_disjoint
+from pr_pilot.data.manifest import bilateral_components, bilateral_group_split, assert_no_test_leakage, assert_pretraining_disjoint
 
 
 def _complex_df():
@@ -86,3 +86,16 @@ def test_multichain_partial_rfam_overlap_is_detected():
     dev.loc[:, "rna_cluster_r80"] = "R_OTHER"
     with pytest.raises(AssertionError, match="Rfam leakage"):
         assert_no_test_leakage(dev, pd.DataFrame(columns=dev.columns), test, True)
+
+
+def test_r80_connects_components_even_when_rfam_is_known_and_different():
+    df = _complex_df().iloc[:2].copy().reset_index(drop=True)
+    df.loc[0, "protein_cluster_p30"] = "P_A"
+    df.loc[1, "protein_cluster_p30"] = "P_B"
+    df.loc[0, "rfam_family"] = "RF_A"
+    df.loc[1, "rfam_family"] = "RF_B"
+    df.loc[0, "rna_cluster_r80"] = "R_SHARED"
+    df.loc[1, "rna_cluster_r80"] = "R_SHARED"
+    components = bilateral_components(df)
+    assert len(components) == 1
+    assert set(components[0]) == set(df.sample_id)
