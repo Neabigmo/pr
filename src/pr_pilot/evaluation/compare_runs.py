@@ -1,14 +1,9 @@
-"""Cross-model and cross-seed statistics for the frozen 100-complex holdout.
+"""Broad cross-model/cross-seed descriptive statistics.
 
-Statistical unit is always the biological complex, never residues/tokens. For a
-model trained with multiple seeds we first compute each seed's per-complex metric,
-then average seeds within model, and only then perform paired comparisons across
-the same complexes. This separates target variance from training-seed variance
-and prevents pseudo-replication.
-
-Input manifest TSV columns:
-    model   seed   run_dir
-where ``run_dir`` contains ``core/*.tsv`` plus the full-suite outputs.
+This module is intentionally *not* the confirmatory hypothesis engine.  H1-H4 and
+Holm correction are implemented in ``confirmatory.py``.  Here every generic metric
+is secondary/exploratory so a large metric table cannot silently expand the
+primary multiple-testing family.
 """
 from __future__ import annotations
 
@@ -16,13 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 import argparse
 import json
-import math
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-from pr_pilot.evaluation.battery import bh_adjust, holm_adjust, paired_bootstrap
+from pr_pilot.evaluation.battery import bh_adjust, paired_bootstrap
 
 
 @dataclass(frozen=True)
@@ -32,7 +26,7 @@ class MetricSpec:
     subset: str | None
     value: str
     higher_is_better: bool
-    primary: bool = True
+    primary: bool = False
 
 
 METRICS = [
@@ -53,7 +47,9 @@ def _token_metric(df: pd.DataFrame, value: str) -> pd.Series:
     if value == "nll":
         return -df.groupby("sample_id")["native_log_probability"].mean()
     if value == "recovery":
-        correct = (df["native_token"].astype(int) == df["predicted_token"].astype(int)).astype(float)
+        correct = (
+            df["native_token"].astype(int) == df["predicted_token"].astype(int)
+        ).astype(float)
         return correct.groupby(df["sample_id"]).mean()
     raise ValueError(value)
 
@@ -89,8 +85,9 @@ def load_run_manifest(path: Path) -> pd.DataFrame:
     return df
 
 
-def collect_metric(manifest: pd.DataFrame, spec: MetricSpec) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return per-seed and within-model seed-averaged per-complex values."""
+def collect_metric(
+    manifest: pd.DataFrame, spec: MetricSpec
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     rows = []
     for record in manifest.itertuples(index=False):
         series = _per_complex(Path(record.run_dir), spec)
@@ -120,7 +117,11 @@ def _paired_wilcoxon(a: np.ndarray, b: np.ndarray) -> float:
     if np.allclose(diff, 0):
         return 1.0
     try:
-        return float(stats.wilcoxon(a, b, zero_method="wilcox", alternative="two-sided").pvalue)
+        return float(
+            stats.wilcoxon(
+                a, b, zero_method="wilcox", alternative="two-sided"
+            ).pvalue
+        )
     except ValueError:
         return 1.0
 
@@ -142,19 +143,26 @@ def compare_models(
     all_seed_tables = []
     all_model_tables = []
     comparisons = []
-    raw_primary_p: dict[str, float] = {}
     raw_exploratory_p: dict[str, float] = {}
 
     for spec in METRICS:
         per_seed, per_model = collect_metric(manifest, spec)
         all_seed_tables.append(per_seed)
         all_model_tables.append(per_model)
-        ref = per_model[per_model.model == reference_model].set_index("sample_id")["seed_mean"]
+        ref = per_model[per_model.model == reference_model].set_index("sample_id")[
+            "seed_mean"
+        ]
         for competitor in models:
             if competitor == reference_model:
                 continue
-            other = per_model[per_model.model == competitor].set_index("sample_id")["seed_mean"]
-            aligned = pd.concat([ref.rename("reference"), other.rename("other")], axis=1, join="inner").dropna()
+            other = per_model[per_model.model == competitor].set_index("sample_id")[
+                "seed_mean"
+            ]
+            aligned = pd.concat(
+                [ref.rename("reference"), other.rename("other")],
+                axis=1,
+                join="inner",
+            ).dropna()
             if len(aligned) < 2:
                 continue
             raw_diff = aligned["reference"] - aligned["other"]
@@ -166,8 +174,7 @@ def compare_models(
                 seed=seed + len(comparisons),
             )
             wilcoxon_p = _paired_wilcoxon(
-                benefit_diff.to_numpy(float),
-                np.zeros(len(benefit_diff), dtype=float),
+                benefit_diff.to_numpy(float), np.zeros(len(benefit_diff), dtype=float)
             )
             key = f"{spec.name}:{reference_model}_vs_{competitor}"
             record = {
@@ -185,24 +192,27 @@ def compare_models(
                 "benefit_ci_high": float(boot["ci_high"]),
                 "bootstrap_p": float(boot["bootstrap_p_two_sided"]),
                 "wilcoxon_p": wilcoxon_p,
-                "primary": spec.primary,
+                "primary": False,
             }
             comparisons.append(record)
-            (raw_primary_p if spec.primary else raw_exploratory_p)[key] = record["bootstrap_p"]
+            raw_exploratory_p[key] = record["bootstrap_p"]
 
     comparison_df = pd.DataFrame(comparisons)
     if len(comparison_df):
-        holm = holm_adjust(raw_primary_p) if raw_primary_p else {}
-        bh = bh_adjust({**raw_primary_p, **raw_exploratory_p}) if comparisons else {}
-        comparison_df["holm_adjusted_primary"] = comparison_df["comparison"].map(holm)
-        comparison_df["bh_adjusted_all"] = comparison_df["comparison"].map(bh)
-    comparison_df.to_csv(out_dir / "paired_model_comparisons.tsv", sep="\t", index=False)
+        bh = bh_adjust(raw_exploratory_p)
+        comparison_df["bh_adjusted_exploratory"] = comparison_df["comparison"].map(bh)
+    comparison_df.to_csv(
+        out_dir / "paired_model_comparisons.tsv", sep="\t", index=False
+    )
 
     per_seed_all = pd.concat(all_seed_tables, ignore_index=True)
     per_model_all = pd.concat(all_model_tables, ignore_index=True)
-    per_seed_all.to_csv(out_dir / "per_seed_per_complex_metrics.tsv", sep="\t", index=False)
-    per_model_all.to_csv(out_dir / "seed_averaged_per_complex_metrics.tsv", sep="\t", index=False)
-
+    per_seed_all.to_csv(
+        out_dir / "per_seed_per_complex_metrics.tsv", sep="\t", index=False
+    )
+    per_model_all.to_csv(
+        out_dir / "seed_averaged_per_complex_metrics.tsv", sep="\t", index=False
+    )
     seed_summary = (
         per_seed_all.groupby(["model", "seed", "metric"])["value"]
         .mean()
@@ -211,7 +221,9 @@ def compare_models(
         .agg(["mean", "std", "min", "max", "count"])
         .reset_index()
     )
-    seed_summary.to_csv(out_dir / "training_seed_stability.tsv", sep="\t", index=False)
+    seed_summary.to_csv(
+        out_dir / "training_seed_stability.tsv", sep="\t", index=False
+    )
 
     summary = {
         "statistical_unit": "complex",
@@ -220,18 +232,18 @@ def compare_models(
         "reference_model": reference_model,
         "models": models,
         "n_comparisons": int(len(comparison_df)),
-        "multiple_testing": {
-            "primary": "Holm on predeclared primary bootstrap p-values",
-            "all_reported": "Benjamini-Hochberg exploratory",
-        },
+        "multiple_testing": "Benjamini-Hochberg exploratory only",
+        "confirmatory_statistics": "Use pr_pilot.evaluation.confirmatory / tools/run_confirmatory_statistics.py for H1-H4 Holm inference.",
     }
-    (out_dir / "comparison_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (out_dir / "comparison_summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
     return summary
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runs", type=Path, required=True, help="TSV with model, seed, run_dir")
+    parser.add_argument("--runs", type=Path, required=True)
     parser.add_argument("--reference", required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--bootstrap", type=int, default=10000)
@@ -239,7 +251,13 @@ def main() -> None:
     args = parser.parse_args()
     print(
         json.dumps(
-            compare_models(args.runs, args.reference, args.out, bootstrap_resamples=args.bootstrap, seed=args.seed),
+            compare_models(
+                args.runs,
+                args.reference,
+                args.out,
+                bootstrap_resamples=args.bootstrap,
+                seed=args.seed,
+            ),
             indent=2,
         )
     )
