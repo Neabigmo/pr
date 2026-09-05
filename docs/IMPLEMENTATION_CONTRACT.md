@@ -1,386 +1,325 @@
-# Implementation Contract — exact tensors, adapters and training invariants
+# Implementation Contract v3 — exact tensors, stage ownership and leakage boundaries
 
-This document is the bridge between the scientific specification and executable local data code. Any Codex/agent implementation must conform to these contracts.
+This document is the current bridge between the scientific design and executable code. Earlier contracts that defined `interface` from the PR message graph, double-centered C during training, or allowed C/DeltaC to co-adapt in Alpha/Joint are superseded.
 
-## 1. Structure sample object
+## 1. Polymer tensors
 
-A single complex loader should return a dictionary or dataclass with the following logical fields.
-
-### Protein
+Protein graph:
 
 ```text
-protein.node_x          float32 [NP, FP]
-protein.edge_index      int64   [2, EPP]
-protein.edge_x          float32 [EPP, FPP]
-protein.sequence        int64   [NP] values 0..19
-protein.interface       bool    [NP]
-protein.valid           bool    [NP]
-protein.residue_id      metadata length NP
+node_x          float [NP, FP] sequence-neutral
+edge_index      long  [2, EPP]
+edge_x          float [EPP, FPP]
+sequence        long  [NP] 0..19, supervision/context token only
+interface       bool  [NP] canonical biological interface label
+valid           bool  [NP]
+fixed           bool  [NP]
+reference_xyz   float [NP,3]
+chain_index     long  [NP]
+residue_ids     metadata
 ```
 
-Protein node features must be sequence-neutral in DM-ICF structural-prior mode. Native amino-acid identity is a label, not an input.
+Protein structural geometry may use N/CA/C/O, virtual CB, local frames, torsions, edge distances and missingness. Native side-chain identity is not an encoder feature.
 
-Allowed geometry includes N/CA/C/O, virtual CB, local frames, backbone torsions and missing-atom masks.
-
-### RNA
+RNA graph:
 
 ```text
-rna.node_x              float32 [NR, FR]
-rna.edge_index          int64   [2, ERR]
-rna.edge_x              float32 [ERR, FRR]
-rna.sequence            int64   [NR] values 0..3 in A,U,G,C order chosen globally
-rna.interface           bool    [NR]
-rna.valid               bool    [NR]
-rna.nucleotide_id       metadata length NR
+node_x          float [NR, FR] sequence-neutral
+edge_index      long  [2, ERR]
+edge_x          float [ERR, FRR]
+sequence        long  [NR] 0..3 in project order A,U,G,C
+interface       bool  [NR] canonical biological interface label
+valid/fixed/reference_xyz/chain_index/residue_ids
 ```
 
-Native base-ring identity atoms are prohibited from `rna.node_x` and `rna.edge_x`.
-
-Allowed atom view:
+Allowed RNA structural atoms:
 
 ```text
 P OP1 OP2 O5' C5' C4' O4' C3' O3' C2' O2' C1'
 ```
 
-The exact atom vocabulary is implemented in `pr_pilot.data.features`.
+Native base-ring identity atoms are prohibited from structural-prior inputs.
 
-### Protein–RNA sparse edges
+## 2. PR message graph
 
-```text
-pr.protein_index        int64   [EPR]
-pr.rna_index            int64   [EPR]
-pr.edge_features        float32 [EPR, FPR]
-pr.effective_distance   float32 [EPR]
-```
-
-Primary rich `edge_features` should contain the following information, with explicit missing-value masks:
-
-1. RBF-expanded distances between sequence-neutral protein atoms and sequence-neutral RNA atoms;
-2. protein-frame displacement of RNA reference geometry;
-3. RNA-frame displacement of protein reference geometry;
-4. relative local-frame rotation representation;
-5. edge/contact masks and chain metadata.
-
-Distance-only ablation must be constructible by a config switch without changing train/test manifests.
-
-## 2. Interface definition
-
-The exact graph cutoff is a model hyperparameter, not a biological truth. Data audit must record contact statistics at several thresholds before final selection.
-
-Recommended pilot default:
-
-- PR graph radial cutoff: 8 Å on sequence-neutral reference geometry;
-- cap: 12 partner neighbours per target node;
-- interface label: position participates in at least one valid PR edge under the frozen graph definition.
-
-For empirical chemistry/PMI analysis, a separate heavy-atom contact definition may be used and must be written into the result metadata. Do not conflate the neural graph cutoff with the biochemical contact cutoff.
-
-## 3. Batch corruption object
-
-Every training batch must expose explicit masks:
+Sparse PR tensors:
 
 ```text
-protein.masked          bool [NP]
-protein.known           bool [NP]
-rna.masked              bool [NR]
-rna.known               bool [NR]
+protein_index        [EPR]
+rna_index            [EPR]
+edge_features        [EPR, FPR]
+effective_distance   [EPR]
 ```
 
-Invariant:
+Primary rich geometry uses:
+
+- Protein N/CA/C/O/virtual-CB;
+- 12 RNA sugar/phosphate atoms;
+- all 5×12 pair distance RBFs + explicit presence masks;
+- displacement in both local frames;
+- relative frame rotation.
+
+Default message receptive field:
 
 ```text
-known == ~masked
+cutoff = 8 A
+max partner neighbours = 12 per side, unioned
 ```
 
-for designable positions, except fixed/padded positions which must have an explicit `valid/designable/fixed` mask.
+This graph is **not** the reporting-interface definition.
 
-Masking generator supports:
+## 3. Canonical interface versus design-time refinement region
 
-- independent random masks;
-- contiguous sequence patches;
-- 3D spatial patches;
-- full mask;
-- interface-upweighted mask;
-- wrong-token corruption;
-- partner-token dropout.
+### Canonical interface
 
-Every corruption realization must be seeded and optionally reproducible from `sample_id + epoch + global_seed`.
+`graph.interface` is computed from original, unaugmented full-heavy-atom Protein/RNA coordinates at the frozen 6-A contact threshold.
 
-## 4. Stage-specific forward views
+It is used for:
 
-### protein_prior
+- PI/RI training-loss grouping;
+- interface/non-interface NLL and recovery;
+- external baseline position labels;
+- confirmatory interface endpoints.
 
-Inputs:
+It must not change when:
 
-- protein structural geometry only.
+- PR graph cutoff changes;
+- PR max-neighbour cap changes;
+- training coordinate noise changes.
 
-Forbidden:
+### Design-time/SPIR region
 
-- RNA geometry;
-- RNA sequence;
-- PR edges;
-- native protein sequence as node feature.
+Inference cannot require native Protein side chains or native RNA base atoms. SPIR therefore derives reopen-eligible positions from nodes participating in the sequence-neutral PR message graph supplied by the target backbones.
 
-Output:
+Never use the canonical native-heavy-atom interface mask to give the generative sampler extra information.
+
+## 4. Model decomposition
 
 ```text
-protein_struct_logits [NP,20]
+q_ij = G_PR(Pi_P hP_i + Pi_R hR_j + f_e(e_ij))
+C in R^(20x4)
+DeltaC_ij in R^(20x4)
+score_ij = -d_eff/tau + residual_alpha(q_ij)
+Gamma_ij = alpha_ij * (C + DeltaC_ij)
 ```
 
-### rna_prior
-
-Inputs:
-
-- RNA sugar–phosphate geometry only.
-
-Forbidden:
-
-- protein context;
-- PR edges;
-- native base-ring atoms;
-- native RNA sequence as node feature.
-
-Output:
+Protein correction:
 
 ```text
-rna_struct_logits [NR,4]
+Delta zP_i(a) = lambda_P sum_j alpha^P_ij [C(a,b_j) + DeltaC_ij(a,b_j)]
 ```
 
-### global_c
+RNA is symmetric. Unknown partner tokens contribute zero through the `known` mask.
 
-Inputs:
+## 5. C / DeltaC gauge
 
-- frozen `hP`, frozen `hR`;
-- PR topology and simple distance weighting;
-- known partner sequence;
-- target-side interface mask.
+Training removes only the single global all-entry scalar offset:
+
+```text
+X <- X - mean(X)
+```
+
+This retains potentially meaningful row/column main effects in the shared bidirectional 20×4 potential.
+
+**Double-centering is post-hoc only** for interaction-only visualization/comparison:
+
+```text
+X_interaction = X - row_mean - column_mean + grand_mean
+```
+
+Do not apply double-centering in the forward path.
+
+`C` starts from small zero-centred random values. Empirical frequencies/PMI never initialize the primary C.
+
+`DeltaC` output projection is exactly zero-initialized. No explicit Frobenius penalty is applied in the primary pilot.
+
+## 6. Alpha semantics
+
+```text
+score_ij = -d_eff/tau + DeltaScore_ij
+```
+
+`DeltaScore` starts at zero, so initial alpha is a distance prior. Protein←RNA and RNA←Protein use the same edge score but normalize over their respective neighbourhoods.
+
+Alpha reads structural hidden states and geometry, not partner token identity directly.
+
+Interpretation: learned relation relevance within the model. It is not a physical force, binding energy or proof of biological causality.
+
+## 7. Strict stage ownership
+
+### Protein prior
 
 Trainable:
 
 ```text
-C [20,4]
-lambda_P
-lambda_R
+protein encoder + token-context decoder + head
 ```
 
-Frozen/disabled:
+Forbidden: RNA geometry/sequence, PR edges, native AA as structural node feature.
+
+### RNA prior
+
+Trainable:
 
 ```text
+RNA encoder + token-context decoder + head
+```
+
+Forbidden: Protein context, PR edges, native base-ring identity atoms.
+
+### Global C
+
+Trainable:
+
+```text
+C only
+```
+
+Fixed:
+
+```text
+both priors
 DeltaC = 0
-learned alpha disabled
-prior encoders frozen
+learned alpha residual disabled
+lambda_P = lambda_R = 1
 ```
 
-### delta_c
+### DeltaC
 
 Trainable:
 
 ```text
+G_PR + DeltaC head
+```
+
+Fixed:
+
+```text
+priors
+C
+learned alpha residual
+lambda = 1
+```
+
+### Alpha
+
+Trainable:
+
+```text
+relevance score head + tau
+```
+
+Fixed:
+
+```text
+priors
+C
 G_PR
-DeltaC projection
+DeltaC
+lambda = 1
+```
+
+This is intentionally stricter than earlier drafts: Alpha should answer “who matters?” without also redefining the contextual matrix.
+
+### Joint
+
+Trainable:
+
+```text
+G_PR / DeltaC / alpha
+bounded lambda_P/lambda_R
+token-context decoders + heads
+pretrained encoders under gradual output-to-input unfreezing
 ```
 
 Frozen:
 
 ```text
-C
-protein prior
-RNA prior
-alpha residual
+Stage-C global C anchor
 ```
 
-Step-zero invariant:
+Scratch-joint control is different: random-initialized encoders are all trainable from step 0.
+
+## 8. Loss contract
+
+For every sample/task, construct semantic group means before combination:
 
 ```text
-DeltaC_ij == 0 for every edge
+PI = mean CE(masked Protein interface)
+PN = mean CE(masked Protein non-interface)
+RI = mean CE(masked RNA interface)
+RN = mean CE(masked RNA non-interface)
 ```
 
-### alpha
-
-Trainable:
+Normalize alphabet scales:
 
 ```text
-G_PR
-DeltaC
-alpha residual score
+Protein group / log(20)
+RNA group / log(4)
 ```
 
-Step-zero alpha invariant:
+Then average available interface/non-interface groups within each polymer. Joint loss gives Protein and RNA equal polymer weight.
+
+Never pool all tokens and sum raw CE across chains/polymers.
+
+### Current pilot limitation
+
+This is polymer/interface group-balanced, **not additionally per-individual-chain balanced**. Do not describe it as a per-chain-balanced objective. Report single-chain versus multi-chain performance as a secondary stratification. Reconsider explicit per-chain balancing before full-scale training if multi-chain examples become common.
+
+## 9. Corruption/augmentation contract
+
+Primary:
+
+- variable 10–100% corruption with explicit non-zero full-mask probability;
+- random + local/spatial patch modes;
+- wrong-token corruption;
+- interface-upweighted sampling;
+- 0.10-A Gaussian coordinate noise during training only;
+- 5% intra-edge dropout;
+- 5% PR-edge dropout once contextual interaction learning begins;
+- light DropPath;
+- Protein/RNA prior label smoothing 0.05;
+- Stage-C prediction uses no label smoothing.
+
+Canonical interface labels are computed from clean coordinates even when training geometry is augmented.
+
+## 10. Validation and refit contract
+
+Prior and conditional stages select by the registered validation normalized NLL.
+
+Joint selection combines:
 
 ```text
-alpha == neighbourhood_softmax(-distance/tau)
+Protein conditional canonical-interface normalized NLL
+RNA conditional canonical-interface normalized NLL
+sequential teacher-forced joint normalized pseudo-NLL
 ```
 
-### joint
+Sequential joint validation scores a token while unknown, then reveals its native token only to later positions. Fixed mixed/Protein-first/RNA-first orders are used on a deterministic validation subset.
 
-Full model can be unfrozen gradually. The run metadata must record exactly when each parameter family became trainable.
+Full-1,000 refit interprets selected epoch K as a **prefix of the original max-epoch schedule horizon H**. Curriculum, cosine LR and unfreezing progress remain `epoch/H`; they are not compressed into K.
 
-## 5. C and DeltaC gauge fixing
+## 11. External baseline contract
 
-Both use double centering:
+Official repositories are pinned in `third_party/LOCK.json`.
+
+ProteinMPNN and NA-MPNN use exactly the same frozen single-polymer IDs as our corresponding priors, first 900/100 development then full-1,000 refit.
+
+They are one-sided structural references and do not by themselves prove partner-coupling value. Causal/mechanistic evidence comes from internal same-data controls and model interventions.
+
+NA-MPNN standardized project probability order is:
 
 ```text
-X[a,b] <- X[a,b]
-          - mean_b X[a,b]
-          - mean_a X[a,b]
-          + mean_ab X[a,b]
+A U G C
+DA DT DG DC   # under shared-token mode
 ```
 
-Reason: additive row/column constants are poorly identifiable in conditional logits and make heatmap interpretation unstable.
+## 12. Final-test/statistics contract
 
-This operation is not a magnitude penalty.
-
-## 6. Alpha semantics
-
-`alpha` is a geometric/relation relevance coefficient.
-
-It answers:
-
-> among multiple partner neighbours, which edges contribute more strongly to the local compatibility correction?
-
-It is **not** claimed to be:
-
-- a physical force;
-- a binding energy;
-- a causal importance score.
-
-Alpha reads structural hidden states and PR geometry; partner token identity acts through `C + DeltaC`, not through alpha.
-
-## 7. Loss implementation
-
-Per-sample raw semantic groups:
-
-```text
-PI = mean CE over masked protein interface
-PN = mean CE over masked protein non-interface
-RI = mean CE over masked RNA interface
-RN = mean CE over masked RNA non-interface
-```
-
-Normalized:
-
-```text
-PI /= log(20)
-PN /= log(20)
-RI /= log(4)
-RN /= log(4)
-```
-
-Protein task:
-
-```text
-LP = mean(non-empty PI, PN)
-```
-
-RNA task:
-
-```text
-LR = mean(non-empty RI, RN)
-```
-
-Joint:
-
-```text
-LJ = 0.5 * (LP + LR)
-```
-
-A missing semantic group is omitted and remaining weights renormalize. Never fill an absent group with zero, because that would artificially lower loss.
-
-## 8. Validation selection
-
-Checkpoint metrics are pre-specified by stage and never use the final 100 test complexes.
-
-Recommended joint composite:
-
-```text
-mean(
-  protein_interface_NLL/log(20),
-  RNA_interface_NLL/log(4),
-  joint_normalized_NLL
-)
-```
-
-Recovery is reported but not the main early-stopping metric.
-
-## 9. Baseline fairness contract
-
-ProteinMPNN and DM-ICF protein prior:
-
-- identical frozen protein sample IDs;
-- both from random initialization in the primary small-data comparison;
-- same 900/100 split;
-- coordinate noise experiments explicitly matched when possible;
-- no published ProteinMPNN weights in the primary from-scratch baseline.
-
-MPNN-fixbb/NA-MPNN and DM-ICF RNA prior:
-
-- identical frozen RNA sample IDs to the maximum technically valid extent;
-- both from random initialization in primary comparison;
-- same 900/100 split;
-- no hidden extra RNA training corpus.
-
-If upstream preprocessing excludes a frozen sample that our model accepts, the comparison must produce both:
-
-1. **intersection benchmark** — exactly shared usable samples;
-2. **intended-pool report** — documents why samples were lost.
-
-Never silently replace excluded samples with new random ones for only one method.
-
-## 10. Test-time prohibitions
-
-After the final 100 are unblinded:
-
-Forbidden:
-
-- architecture changes;
-- mask schedule changes;
-- cutoff/neighbour changes;
-- coordinate noise selection;
-- SPIR fraction selection;
-- new checkpoint selection;
-- choosing a favourable seed;
-- deleting difficult complexes because a metric looks poor.
-
-Allowed:
-
-- running the pre-registered metric battery;
-- correcting a genuine code bug if the correction is documented and all affected methods/metrics are rerun;
-- reporting prespecified subgroup analyses.
-
-## 11. Required tests before GPU training
-
-Unit tests must cover:
-
-- C shape and initialization;
-- DeltaC exact zero initialization;
-- double-centering;
-- alpha neighbourhood normalization;
-- distance-prior alpha at initialization;
-- unknown partner -> zero interaction correction;
-- RNA base-atom leakage guard;
-- balanced four-group loss under extreme group-size imbalance;
-- no NaN on absent PI/PN/RI/RN groups;
-- deterministic manifest sampling;
-- test leakage detection;
-- task/stage contract violations;
-- fixed-site masks;
-- SPIR never modifies non-interface positions.
-
-## 12. External predictors
-
-External structure predictors are optional evaluators. Adapter contracts should consume generated FASTA/sequences plus target complex metadata and output a standardized table containing:
-
-```text
-sample_id
-candidate_id
-predictor
-predictor_version
-seed
-protein_backbone_metric
-rna_backbone_metric
-interface_metric
-confidence_metric
-raw_output_path
-```
-
-Do not train DM-ICF against these values in the primary mini-pilot.
+- final 100 are immutable and never tune the method;
+- statistical unit = biological complex;
+- three primary training seeds receive core evaluation;
+- heavyweight generative/mechanistic battery is limited to the predeclared analysis seed;
+- primary hypotheses are frozen in `configs/hypotheses.yaml` and Holm-corrected as one family;
+- remaining robustness/interpretability analyses are secondary/exploratory;
+- use “model-interventional sensitivity”, not biological-causality language, for in-silico perturbations.

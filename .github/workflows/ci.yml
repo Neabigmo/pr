@@ -10,9 +10,6 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-# Rapid scientific development can create many commits in minutes. Only the
-# newest run on a branch is scientifically relevant; older runs are cancelled
-# instead of filling the Actions page with stale failures/queues.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -20,7 +17,7 @@ concurrency:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
@@ -33,11 +30,23 @@ jobs:
       - name: Install
         run: python -m pip install -e '.[dev]'
 
+      - name: Compile all Python
+        run: python -m compileall -q src tests tools
+
       - name: Unit tests
         run: python -m pytest
 
-      # Blocking lint is correctness-only while the research code is changing
-      # rapidly. Full formatting/style cleanup belongs to a release-prep pass,
-      # not to the scientific correctness gate.
+      - name: Config semantic audit
+        run: python tools/audit_config_usage.py --config configs/pilot.yaml --repo-root . --out /tmp/config_audit.json
+
+      - name: CLI smoke tests
+        run: |
+          pr-pilot --help
+          python tools/run_official_baselines.py --help
+          python tools/evaluate_official_baselines.py --help
+          python tools/run_pilot_experiments.py --help
+          python -m pr_pilot.evaluation.full_suite --help
+          python -m pr_pilot.evaluation.field_audit --help
+
       - name: Ruff correctness
         run: ruff check src tests tools --select E9,F63,F7,F82

@@ -1,416 +1,326 @@
-# PR Mini-Pilot Runbook
+# PR Mini-Pilot Runbook — audited v3
 
-This runbook is the operational order of execution. Do not skip stages. Every command should be executed from a clean git commit and should write its resolved configuration and manifest checksums to `artifacts/`.
+This is the canonical execution order. Do not use older ad-hoc commands from notebooks or issue comments.
 
-## 1. Environment
+## 0. Rules before anything expensive
 
-Recommended:
+- work from a clean commit;
+- archive resolved config, git SHA, software versions and manifest SHA256s for every run;
+- never open final-100 metrics before the development configuration is frozen;
+- primary final checkpoints must be full-1,000 refits, not 900-sample development checkpoints;
+- all methods use the exact frozen IDs assigned to their task.
+
+## 1. Environment and source audit
 
 ```bash
 conda create -n pr-pilot python=3.11 -y
 conda activate pr-pilot
 pip install -e '.[dev]'
+
+python -m compileall -q src tests tools
 pytest
+python tools/audit_config_usage.py --config configs/pilot.yaml --repo-root .
+pr-pilot --help
 ```
 
-For the user's Windows workstation, the preferred existing environment can be used instead, but the exact Python/PyTorch/CUDA versions must be written into the run metadata.
+The config audit must report zero `unknown_or_dead` keys.
 
-## 2. Freeze upstream baseline versions
+## 2. Pin official baseline repositories
 
-Clone third-party code outside our package namespace:
+Copy:
+
+```text
+third_party/LOCK.template.json -> third_party/LOCK.json
+```
+
+Replace both placeholders with reviewed immutable 40-character SHAs for:
+
+- `dauparas/ProteinMPNN`;
+- `baker-laboratory/NA-MPNN`.
+
+Then run:
 
 ```bash
-mkdir -p third_party
-cd third_party
-git clone https://github.com/dauparas/ProteinMPNN.git proteinmpnn
-git clone https://github.com/baker-laboratory/NA-MPNN.git na_mpnn
+python tools/preflight_official_baselines.py \
+  --repo-root . \
+  --third-party-root third_party/checkouts \
+  --out artifacts/preflight/baselines.json
 ```
 
-Then record exact immutable SHAs in:
+This checks the pinned upstream CLI contracts, including ProteinMPNN's actual training arguments, NA-MPNN's positional JSON training interface, and the project AUGC probability-column mapping.
 
-```text
-third_party/LOCK.json
-```
+## 3. Data acquisition
 
-Never run `git pull` during a reported experiment without updating the lock and starting a new experiment version.
+Follow `docs/DATA_PIPELINE.md` exactly.
 
-## 3. Build eligible source tables
-
-The pilot assumes three normalized eligible tables exist:
-
-```text
-data/eligible/proteins.tsv
-data/eligible/rnas.tsv
-data/eligible/complexes.tsv
-```
-
-### proteins.tsv minimum columns
-
-```text
-sample_id
-structure_path
-sequence
-sequence_hash
-protein_cluster_p90
-protein_cluster_p40
-protein_cluster_p30
-experimental
-resolution
-release_date
-```
-
-### rnas.tsv minimum columns
-
-```text
-sample_id
-structure_path
-sequence
-sequence_hash
-rna_cluster_r90
-rna_cluster_r80
-rfam_family
-experimental
-resolution
-release_date
-```
-
-### complexes.tsv minimum columns
-
-```text
-sample_id
-structure_path
-protein_sequence
-rna_sequence
-protein_hash
-rna_hash
-protein_cluster_p30
-rna_cluster_r80
-rfam_family
-mother_sample_id
-experimental
-resolution
-release_date
-```
-
-The complex table must contain **biological-assembly, interface-connected mother samples**, not arbitrary asymmetric-unit rows.
-
-## 4. Freeze the pilot manifests
-
-Use the manifest library from `pr_pilot.data.manifest`. A CLI wrapper should be run after installation:
+### 3.1 Discover
 
 ```bash
-python -m pr_pilot.cli freeze \
+mkdir -p data/discovery
+pr-pilot discover-rcsb --kind protein --out data/discovery/protein.tsv
+pr-pilot discover-rcsb --kind rna --out data/discovery/rna.tsv
+pr-pilot discover-rcsb --kind complex --out data/discovery/complex.tsv
+```
+
+### 3.2 Oversized deterministic downloads
+
+Do not stop at exactly 1,000/1,000/1,100 raw entries.
+
+```bash
+pr-pilot download-rcsb --kind protein --candidates data/discovery/protein.tsv \
+  --out data/raw/protein --seed 20260905 --max-candidates 5000
+pr-pilot download-rcsb --kind rna --candidates data/discovery/rna.tsv \
+  --out data/raw/rna --seed 20261006 --max-candidates 3000
+pr-pilot download-rcsb --kind complex --candidates data/discovery/complex.tsv \
+  --out data/raw/complex --seed 20261107 --max-candidates 6000
+```
+
+### 3.3 Coordinate screening
+
+```bash
+pr-pilot screen --kind protein --config configs/pilot.yaml \
+  --download-manifest data/raw/protein/download_manifest.tsv --out data/screened/protein
+pr-pilot screen --kind rna --config configs/pilot.yaml \
+  --download-manifest data/raw/rna/download_manifest.tsv --out data/screened/rna
+pr-pilot screen --kind complex --config configs/pilot.yaml \
+  --download-manifest data/raw/complex/download_manifest.tsv --out data/screened/complex
+```
+
+Complex screening enforces Protein and RNA individual length limits as well as total length. Rejection tables are permanent audit artifacts.
+
+### 3.4 Build RNA prior candidate views
+
+```bash
+python tools/build_rna_candidate_pool.py \
+  --standalone data/screened/rna/rna_eligible.tsv \
+  --complexes data/screened/complex/complex_eligible.tsv \
+  --out data/screened/rna_prior_candidates.tsv
+```
+
+For complex-derived RNA views, the Protein partner is not loaded during RNA-prior training.
+
+### 3.5 Joint clustering and Rfam
+
+```bash
+pr-pilot download-rfam --out data/reference/rfam
+
+pr-pilot annotate \
+  --proteins data/screened/protein/protein_eligible.tsv \
+  --rnas data/screened/rna_prior_candidates.tsv \
+  --complexes data/screened/complex/complex_eligible.tsv \
+  --rfam-cm-gz data/reference/rfam/Rfam.cm.gz \
+  --rfam-clanin data/reference/rfam/Rfam.clanin \
+  --cpu 16 \
+  --out data/annotated
+```
+
+Single-polymer candidates and complex chains must be clustered in the same universe.
+
+## 4. Freeze manifests — final test first
+
+```bash
+rm -rf manifests/pilot_v1
+pr-pilot freeze \
   --config configs/pilot.yaml \
-  --proteins data/eligible/proteins.tsv \
-  --rnas data/eligible/rnas.tsv \
-  --complexes data/eligible/complexes.tsv \
-  --out artifacts/manifests
+  --proteins data/annotated/protein_annotated.tsv \
+  --rnas data/annotated/rna_annotated.tsv \
+  --complexes data/annotated/complex_annotated.tsv \
+  --out manifests/pilot_v1
 ```
 
-Expected outputs:
+Expected:
 
 ```text
-protein_pool.tsv      # 1000
-protein_train.tsv     # 900
-protein_val.tsv       # 100
-rna_pool.tsv          # 1000
-rna_train.tsv         # 900
-rna_val.tsv           # 100
-complex_pool.tsv      # 1100
-complex_dev.tsv       # 1000
-complex_train.tsv     # 900
-complex_val.tsv       # 100
-complex_test.tsv      # 100 -- LOCKED FINAL HOLDOUT
+protein_pool  1000 = 900 train + 100 P30-disjoint validation
+rna_pool      1000 = 900 train + 100 R80/Rfam-disjoint validation
+complex_dev   1000 = 900 train + 100 bilateral-disjoint validation
+complex_test   100 = immutable strict P30 + R80 + Rfam holdout
 ```
 
-Immediately commit only the checksums/IDs if structure redistribution is inappropriate. Do not leak final test labels into notebooks used for development.
+The final 100 are frozen before prior-pool sampling. Exact sequences and final-test P30/R80/Rfam neighbours are purged from both prior pools.
 
-## 5. Run data audit
-
-Required before any training:
+## 5. Mandatory manifest audit
 
 ```bash
-python -m pr_pilot.cli audit-data \
+pr-pilot audit-data \
   --config configs/pilot.yaml \
-  --manifest-root artifacts/manifests \
+  --manifest-root manifests/pilot_v1 \
   --out artifacts/data_audit
 ```
 
-The audit must verify:
+Also inspect manually:
 
-- exact counts;
-- no duplicate mother samples;
-- no exact sequence leakage;
-- P30/Rfam strict overlap status;
-- protein/RNA length distributions;
-- resolution distribution;
-- interface residue/nucleotide counts;
-- PR edge counts under multiple distance cutoffs;
-- 20x4 AA/base observations;
-- base/sugar/phosphate contact breakdown where possible;
-- missing-atom rates;
-- RNA prohibited-atom leakage audit;
-- manifest SHA256.
+- length distributions;
+- experimental method/resolution distribution;
+- RNA standalone vs extracted-chain source fraction;
+- interface size and missingness;
+- family/component sizes;
+- rejection reasons;
+- strict dev/test covariate shifts.
 
-**Do not train if the audit fails.**
+Do not “repair” an awkward final 100 after seeing performance.
 
-## 6. Baseline A: ProteinMPNN
-
-### 6.1 Prepare upstream data
+## 6. Prepare and smoke-test official baselines
 
 ```bash
-python tools/prepare_proteinmpnn.py \
-  --manifest artifacts/manifests/protein_train.tsv \
-  --validation artifacts/manifests/protein_val.tsv \
-  --upstream third_party/proteinmpnn \
-  --out artifacts/baselines/proteinmpnn/data
+python tools/run_official_baselines.py \
+  --repo-root . \
+  --manifest-root manifests/pilot_v1 \
+  --out artifacts/baselines \
+  --third-party-root third_party/checkouts \
+  --prepare-only
 ```
 
-The adapter must preserve `sample_id` and emit a report proving exactly 900 train / 100 validation structures were converted.
+Before full training, manually run one prepared Protein and one prepared RNA sample through the pinned upstream code. The canonicalized sequence must match the frozen manifest exactly.
 
-### 6.2 Train from scratch
+## 7. Development training
 
-Use the upstream training entrypoint corresponding to the pinned SHA. Do not silently use published pretrained weights.
+Dry-run the project orchestration first:
 
-The exact command must be written to:
+```bash
+python tools/run_pilot_experiments.py \
+  --config configs/pilot.yaml \
+  --manifest-root manifests/pilot_v1 \
+  --out artifacts/pilot_experiments \
+  --families primary \
+  --dry-run
+```
+
+Then execute only after the data and baseline gates pass:
+
+```bash
+python tools/run_pilot_experiments.py \
+  --config configs/pilot.yaml \
+  --manifest-root manifests/pilot_v1 \
+  --out artifacts/pilot_experiments \
+  --families primary \
+  --execute
+```
+
+Development stage order is mandatory:
 
 ```text
-artifacts/baselines/proteinmpnn/train_command.txt
+Protein prior -> RNA prior -> C -> DeltaC -> alpha -> joint
 ```
 
-### 6.3 Export standardized predictions
+Parameter ownership:
+
+- C: C only;
+- DeltaC: interaction encoder + DeltaC only;
+- alpha: relevance/tau only;
+- joint: C remains frozen; context field/lambdas adapt; pretrained encoders gradually unfreeze.
+
+For the scratch-joint control, all random-initialized encoder parameters are trainable from step 0.
+
+## 8. Full-1,000 refit
+
+This is automatically performed by `run_pilot_experiments.py` for the primary track.
+
+A development best epoch is interpreted as a **prefix of the original schedule**. Refit uses the same curriculum/cosine/unfreezing horizon and stops at that selected prefix; it does not compress the entire schedule into fewer epochs.
+
+Only `primary_refit_full1000/.../joint/refit.pt` checkpoints support the primary final claim.
+
+## 9. Official baseline full training and refit
 
 ```bash
-python tools/export_proteinmpnn.py ...
+python tools/run_official_baselines.py \
+  --repo-root . \
+  --manifest-root manifests/pilot_v1 \
+  --out artifacts/baselines \
+  --third-party-root third_party/checkouts
 ```
 
-Output schema is defined in `pr_pilot.baselines.wrappers.standardized_prediction_schema()`.
+The wrapper uses the unmodified pinned upstream code and records every command. ProteinMPNN upstream worker reseeding prevents a claim of bitwise determinism; therefore report independent runs rather than claiming exact rerun identity.
 
-## 7. Baseline B: MPNN-fixbb / NA-MPNN RNA
+## 10. Freeze final configuration and hypotheses
 
-Repeat the same logic using `third_party/na_mpnn` and the frozen 900/100 RNA manifest.
-
-No published pretrained weight may be used for the from-scratch comparison unless explicitly named as a separate transfer-learning baseline.
-
-## 8. DM-ICF Stage P: protein structural prior
-
-```bash
-python -m pr_pilot.cli train \
-  --stage protein_prior \
-  --config configs/pilot.yaml \
-  --manifest artifacts/manifests/protein_train.tsv \
-  --validation artifacts/manifests/protein_val.tsv
-```
-
-Checkpoint selection is allowed only by protein validation normalized NLL.
-
-## 9. DM-ICF Stage R: RNA structural prior
-
-```bash
-python -m pr_pilot.cli train \
-  --stage rna_prior \
-  --config configs/pilot.yaml \
-  --manifest artifacts/manifests/rna_train.tsv \
-  --validation artifacts/manifests/rna_val.tsv
-```
-
-The RNA input view must pass the no-base-identity-atom unit tests.
-
-## 10. Stage C: global 20x4 C
-
-Initialize from the selected P/R prior checkpoints.
-
-```bash
-python -m pr_pilot.cli train \
-  --stage global_c \
-  --config configs/pilot.yaml \
-  --manifest artifacts/manifests/complex_train.tsv \
-  --validation artifacts/manifests/complex_val.tsv
-```
-
-Hard requirements:
-
-- priors frozen;
-- C small random initialized;
-- no empirical PMI input;
-- protein-conditional and RNA-conditional batches alternate 1:1;
-- no learned DeltaC;
-- no learned alpha;
-- test manifest inaccessible.
-
-Save C heatmaps for debugging, but never use final-test PMI to choose training duration.
-
-## 11. Stage Delta: contextual residual
-
-```bash
-python -m pr_pilot.cli train --stage delta_c ...
-```
-
-Hard requirements:
-
-- priors frozen;
-- C frozen;
-- DeltaC output zero at step 0;
-- rich PR geometry enabled in primary run;
-- no explicit DeltaC norm penalty.
-
-## 12. Stage Alpha
-
-```bash
-python -m pr_pilot.cli train --stage alpha ...
-```
-
-Hard requirements:
-
-- alpha residual starts at zero;
-- initial alpha equals the distance prior;
-- early weak entropy regularization anneals to zero;
-- PR edge dropout and partner-token dropout are logged.
-
-## 13. Stage Joint
-
-```bash
-python -m pr_pilot.cli train --stage joint ...
-```
-
-Task schedule: 2:2:1 -> 1:1:1.
-
-Use gradual unfreezing and discriminative learning rates. Raw and normalized PI/PN/RI/RN losses must be logged separately.
-
-## 14. Frozen hyperparameter decision
-
-At this point—and **before reading the final test metrics**—write:
+Before opening final-test metrics, archive:
 
 ```text
 artifacts/FROZEN_FINAL_CONFIGURATION.yaml
+configs/hypotheses.yaml
+third_party/LOCK.json
+manifest checksums
+repository commit SHA
 ```
 
-It must contain:
+The primary family in `configs/hypotheses.yaml` is the only family receiving Holm confirmatory correction. Other tests are secondary/exploratory.
 
-- architecture;
-- coordinate noise;
-- cutoffs/neighbour caps;
-- loss rules;
-- selected checkpoint policy;
-- SPIR fraction/temperature;
-- inference candidate count;
-- all ablation definitions.
+## 11. Final 100 evaluation
 
-## 15. Optional full-development refit
+All three primary seeds receive core evaluation. Only the predeclared `evaluation.analysis_seed` receives the heavyweight mechanistic/order/SPIR battery.
 
-Retrain the selected configuration on:
+The canonical interface is a full-heavy-atom 6 Å label and is independent of the model's 8 Å/capped PR message graph.
 
-- all 1000 protein structures;
-- all 1000 RNA structures;
-- all 1000 complex development samples.
+Heavy candidate ablations use 16 candidates/cell by default. Primary design generation may still use 64 candidates/complex.
 
-Do **not** change hyperparameters after this point.
-
-## 16. Generate joint candidates
+## 12. Internal controls and component ladder
 
 ```bash
-python -m pr_pilot.cli design \
-  --config artifacts/FROZEN_FINAL_CONFIGURATION.yaml \
-  --manifest artifacts/manifests/complex_test.tsv \
-  --mode joint \
-  --candidates 64
+python tools/run_pilot_experiments.py \
+  --config configs/pilot.yaml \
+  --manifest-root manifests/pilot_v1 \
+  --out artifacts/pilot_experiments \
+  --families component_ladder \
+  --execute
 ```
 
-Generation must include random mixed decoding and create both pre-SPIR and post-SPIR outputs.
+Required controls include:
 
-## 17. Run the final 100-complex battery
+- scratch joint;
+- dual structural prior;
+- + global C;
+- + DeltaC;
+- + alpha;
+- full joint;
+- partner-blind;
+- geometry-only capacity control;
+- fixed empirical-PMI reference;
+- backbone-only-context C control.
+
+External ProteinMPNN/NA-MPNN references must not be presented as substitutes for these same-data partner-coupling controls.
+
+## 13. Data-efficiency curve
+
+The 10/25/50/100% complex-training subsets must be **nested**. The v3 orchestrator uses one deterministic ranking seed for every fraction.
+
+## 14. Interpretability audits
+
+Run/retain:
 
 ```bash
-python -m pr_pilot.cli evaluate \
-  --config artifacts/FROZEN_FINAL_CONFIGURATION.yaml \
-  --test-manifest artifacts/manifests/complex_test.tsv \
-  --registry all \
-  --out artifacts/metrics/final_100
+python -m pr_pilot.evaluation.field_audit \
+  --config configs/pilot.yaml \
+  --checkpoint <final-refit.pt> \
+  --manifest manifests/pilot_v1/complex_dev.tsv \
+  --out artifacts/interpretability/delta_c_drift
 ```
 
-Mandatory families are enumerated in `pr_pilot.evaluation.battery.MANDATORY_TESTS`.
+Report:
 
-## 18. Primary statistical report
+- Stage-C anchor `C`;
+- raw and double-centered C views;
+- independent heavy-atom empirical PMI;
+- `mean(DeltaC)` and alpha-weighted mean drift;
+- `C_eff = C + mean(DeltaC)` when residual drift is non-negligible;
+- alpha entropy/effective-neighbour behavior.
 
-```bash
-python -m pr_pilot.cli statistics \
-  --metrics artifacts/metrics/final_100 \
-  --bootstrap 10000 \
-  --out artifacts/statistics/final_100
-```
+Do not call C or C+DeltaC a thermodynamic binding energy.
 
-Paired resampling unit = complex, not residue.
+## 15. Completion gate
 
-## 19. Interpretability report
+The pilot is complete only when:
 
-Required outputs:
-
-```text
-artifacts/interpretability/C_learned.csv
-artifacts/interpretability/C_heatmap.*
-artifacts/interpretability/PMI_experimental.csv
-artifacts/interpretability/C_vs_PMI.json
-artifacts/interpretability/DeltaC_summary.csv
-artifacts/interpretability/DeltaC_examples/
-artifacts/interpretability/alpha_summary.csv
-artifacts/interpretability/alpha_examples/
-```
-
-## 20. Robustness report
-
-Required stress matrix:
-
-```text
-coordinate noise: 0, .05, .10, .20 Å
-PR edge drop:      0, .05, .10, .20
-partner hide:      0, .10, .20, .40
-decoding orders:   multiple independent random orders
-SPIR:              none, 1 cycle, repeated
-```
-
-## 21. Data-efficiency report
-
-Nested complex-training subsets: 10/25/50/100%.
-
-Compare at minimum:
-
-- scratch joint model;
-- dual structural priors + DM-ICF.
-
-Do not choose the subset seeds separately for each model; all methods use identical nested subsets.
-
-## 22. External structure prediction (optional but valuable)
-
-Run after the sequence-design evaluation. Structure predictors must remain external evaluators in this pilot.
-
-Do not call a model score “binding energy”. Keep protein, RNA and interface structural consistency metrics separate.
-
-## 23. Completion checklist
-
-The experiment is not complete until:
-
-- [ ] 1,000 protein manifest frozen
-- [ ] 1,000 RNA manifest frozen
-- [ ] 1,100 complex manifest frozen
-- [ ] 100 final test locked
-- [ ] ProteinMPNN trained from scratch
-- [ ] MPNN-fixbb/NA-MPNN trained from scratch
-- [ ] Stage P complete
-- [ ] Stage R complete
-- [ ] Stage C complete
-- [ ] Stage Delta complete
-- [ ] Stage Alpha complete
-- [ ] Stage Joint complete
-- [ ] SPIR implemented
-- [ ] all core ablations complete
-- [ ] partner scramble complete
-- [ ] local counterfactual complete
-- [ ] C vs PMI complete
-- [ ] DeltaC analysis complete
-- [ ] alpha analysis complete
-- [ ] robustness matrix complete
-- [ ] calibration complete
-- [ ] decoding-order analysis complete
-- [ ] data-efficiency curves complete
-- [ ] paired statistics complete
-- [ ] final reproducibility manifest complete
+- [ ] source/CI/config audit passes;
+- [ ] official-baseline preflight passes pinned SHAs;
+- [ ] frozen 1000/1000/1100 manifests and rejection tables archived;
+- [ ] strict data audit passes;
+- [ ] three primary development + full-1000 refit runs complete;
+- [ ] official ProteinMPNN and NA-MPNN development + full-1000 refits complete;
+- [ ] internal controls/component ladder complete;
+- [ ] nested data-efficiency analysis complete;
+- [ ] final 100 core metrics complete for all primary seeds;
+- [ ] heavy final battery complete for the predeclared analysis seed;
+- [ ] C/PMI, DeltaC drift and alpha analyses complete;
+- [ ] paired complex-level bootstrap and predeclared multiplicity handling complete;
+- [ ] exact run manifests, commands, versions and checksums archived.

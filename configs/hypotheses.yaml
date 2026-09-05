@@ -1,0 +1,53 @@
+# Confirmatory and exploratory analysis registry for the PR mini-pilot.
+# Freeze this file before opening final-100 metrics.
+
+primary_confirmatory:
+  - id: H1
+    claim: "DM-ICF improves interface sequence modelling beyond dual structural priors."
+    comparison: "F_joint_full1000 vs B_dual_prior_full1000"
+    endpoint: "complex-level canonical-interface normalized NLL"
+    direction: "lower"
+
+  - id: H2a
+    claim: "DM-ICF gain requires partner sequence identity, not merely extra complex-model capacity."
+    comparison: "DMICF_full1000 vs partner_blind"
+    endpoint: "complex-level canonical-interface normalized NLL"
+    direction: "lower"
+
+  - id: H2b
+    claim: "DM-ICF gain exceeds a geometry-only capacity control that cannot read partner token identity."
+    comparison: "DMICF_full1000 vs geometry_only"
+    endpoint: "complex-level canonical-interface normalized NLL"
+    direction: "lower"
+
+  - id: H3
+    claim: "Context-dependent compatibility adds information beyond the global C anchor."
+    comparison: "F_joint_full1000 vs C_global_C_full1000"
+    endpoint: "complex-level canonical-interface normalized NLL"
+    direction: "lower"
+
+  - id: H4
+    claim: "Partner-sequence scrambling selectively harms interface prediction."
+    comparison: "native partner vs within-complex partner scramble"
+    endpoint: "paired interface DeltaNLL; interpreted as model-interventional sensitivity"
+    direction: "higher_after_scramble"
+
+multiplicity:
+  primary_family: "Holm correction across H1,H2a,H2b,H3,H4 only"
+  statistical_unit: "biological complex"
+  seeds: "aggregate predeclared training seeds within complex before primary paired inference"
+
+secondary:
+  - "C versus independent full-heavy-atom empirical PMI"
+  - "DeltaC mean-drift and geometry-stratified magnitude"
+  - "alpha entropy/effective-neighbour analysis and top-edge removal"
+  - "coordinate-noise, PR-edge-removal and partner-hiding robustness"
+  - "decoding-order sensitivity"
+  - "one-pass versus repeated SPIR"
+  - "calibration"
+  - "10/25/50/100% complex-data efficiency"
+  - "NMR versus X-ray/cryo-EM stratification"
+
+exploratory:
+  multiplicity: "BH where a formal family is tested; otherwise effect sizes and confidence intervals"
+  language_guard: "Do not describe model interventions as biological causality."
