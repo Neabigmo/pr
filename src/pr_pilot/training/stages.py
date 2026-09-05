@@ -1,4 +1,9 @@
-"""Stage orchestration and optimizer ownership for DM-ICF."""
+"""Stage orchestration and optimizer ownership for DM-ICF.
+
+The primary staged experiment deliberately separates explanatory roles:
+C learns the global compatibility anchor, DeltaC learns contextual corrections,
+alpha learns neighbour relevance, and joint adaptation never moves the C anchor.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,22 +49,28 @@ def _set_module(module: nn.Module, value: bool) -> None:
         p.requires_grad = value
 
 
+def _freeze_global_anchor(model: JointPriorAndFieldModel) -> None:
+    """C is a population anchor and must not drift after Stage GLOBAL_C."""
+    _set_module(model.dmicf.global_c, False)
+
+
 def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> dict[str, int]:
     """Release pretrained encoders from output-proximal layers toward inputs.
 
     Contextual heads, token-context decoders and output heads are trainable from
     joint step 0. Encoder message/update blocks are released progressively. Raw
     node/edge projections are released only in the last 20% of joint training.
+    The learned global C anchor remains frozen throughout joint adaptation.
     """
     progress = float(min(max(progress, 0.0), 1.0))
     for module in [model.dmicf, model.protein_decoder, model.rna_decoder, model.protein_head, model.rna_head]:
         _set_module(module, True)
+    _freeze_global_anchor(model)
 
     released = {}
     for name, enc in [("protein", model.protein_encoder), ("rna", model.rna_encoder)]:
         _set_module(enc, False)
         n = len(enc.message)
-        # start with the top block, then release one-by-one.
         n_release = min(n, max(1, int(math.ceil(progress * n))))
         for idx in range(n - n_release, n):
             _set_module(enc.message[idx], True)
@@ -74,7 +85,13 @@ def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> d
 
 def configure_stage(model: JointPriorAndFieldModel, stage: Stage) -> StageContract:
     set_trainable_stage(model, stage.value)
-    if stage == Stage.JOINT:
+    if stage == Stage.ALPHA:
+        # Alpha is the neighbour-relevance stage. Interaction/DeltaC are already
+        # learned and intentionally frozen so they cannot re-absorb alpha's role.
+        for p in model.parameters():
+            p.requires_grad = False
+        _set_module(model.dmicf.relevance, True)
+    elif stage == Stage.JOINT:
         apply_joint_unfreezing(model, 0.0)
     return CONTRACTS[stage]
 
@@ -117,7 +134,7 @@ def build_optimizer(
     lr_projections: float = 5e-4,
     lr_encoder_top: float = 1e-4,
     lr_encoder_bottom: float = 2e-5,
-    lr_global_c_joint: float = 1e-5,
+    lr_global_c_joint: float = 0.0,
     weight_decay: float = 1e-2,
     layerwise_lr_decay: float = 0.85,
 ) -> torch.optim.Optimizer:
@@ -135,7 +152,6 @@ def build_optimizer(
             _group(_params(model.rna_head), lr_heads, weight_decay),
         ]
     elif stage == Stage.GLOBAL_C:
-        # Gains are fixed at exactly one here; otherwise lambda*C is scale-degenerate.
         groups.append(_group([model.dmicf.global_c.raw], lr_heads, 0.0))
     elif stage == Stage.DELTA_C:
         groups += [
@@ -143,11 +159,7 @@ def build_optimizer(
             _group(_params(model.dmicf.delta), lr_heads, weight_decay),
         ]
     elif stage == Stage.ALPHA:
-        groups += [
-            _group(_params(model.dmicf.interaction), lr_heads, weight_decay),
-            _group(_params(model.dmicf.delta), lr_heads, weight_decay),
-            _group(_params(model.dmicf.relevance), lr_heads, weight_decay),
-        ]
+        groups.append(_group(_params(model.dmicf.relevance), lr_heads, weight_decay))
     elif stage == Stage.JOINT:
         groups += [
             _group(_params(model.dmicf.interaction, False), lr_heads, weight_decay),
@@ -159,7 +171,6 @@ def build_optimizer(
             _group(_params(model.rna_head, False), lr_projections, weight_decay),
             *_encoder_layer_groups(model.protein_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
             *_encoder_layer_groups(model.rna_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
-            _group([model.dmicf.global_c.raw], lr_global_c_joint, 0.0),
             _group([model.dmicf.raw_lambda_p, model.dmicf.raw_lambda_r], lr_projections, 0.0),
         ]
     else:
