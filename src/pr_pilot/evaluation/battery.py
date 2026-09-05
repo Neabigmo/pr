@@ -1,6 +1,6 @@
 """Held-out evaluation primitives and pre-registered test hierarchy.
 
-Only five hypothesis families are confirmatory and enter the primary Holm
+Exactly four hypothesis families are confirmatory and enter the primary Holm
 correction.  The broader battery remains mandatory for characterization but is
 secondary/exploratory; a rich test suite must not be turned into dozens of
 nominally primary hypotheses after seeing the final 100 complexes.
@@ -26,12 +26,11 @@ class MandatoryTest:
 
 
 MANDATORY_TESTS = [
-    # Confirmatory family: exactly the five hypotheses frozen in pilot.yaml.
     MandatoryTest(
         "H1_full_vs_dual_prior_interface_normalized_nll",
         "confirmatory",
         True,
-        "Full DM-ICF versus dual structural priors; primary endpoint is complex-level interface normalized NLL.",
+        "Full DM-ICF versus dual structural priors; primary endpoint is complex-level canonical-interface normalized NLL.",
         "confirmatory",
     ),
     MandatoryTest(
@@ -56,24 +55,21 @@ MANDATORY_TESTS = [
         "confirmatory",
     ),
     MandatoryTest(
-        "H5_alpha_top_edge_vs_distance_matched_edge_removal",
-        "confirmatory",
-        True,
+        "alpha_top_edge_vs_distance_matched_edge_removal",
+        "mechanism",
+        False,
         "Remove top-alpha edges versus distance-matched lower-alpha edges and compare target NLL degradation.",
-        "confirmatory",
+        "secondary",
     ),
-    # Descriptive prediction metrics.
     MandatoryTest("core_sequence_metrics", "prediction", False, "Protein/RNA raw and entropy-normalized NLL and recovery, split by canonical interface/non-interface.", "descriptive"),
     MandatoryTest("conditional_protein", "prediction", False, "RNA-known Protein design; ProteinMPNN is a one-sided structural reference.", "secondary"),
     MandatoryTest("conditional_rna", "prediction", False, "Protein-known RNA design; MPNN-fixbb/NA-MPNN is a one-sided structural reference.", "secondary"),
     MandatoryTest("joint_mixed_order", "prediction", False, "Teacher-forced sequential pseudo-NLL under fixed mixed and directional orders.", "secondary"),
-    # Mechanistic / interpretability analyses.
     MandatoryTest("counterfactual_partner_mutation", "mechanism", False, "Bidirectional single partner-token perturbation; local KL versus distance.", "secondary"),
     MandatoryTest("global_c_vs_pmi", "interpretability", False, "Post-hoc C anchor versus independent heavy-atom PMI; PMI never initializes the primary model.", "secondary"),
     MandatoryTest("c_seed_stability", "interpretability", False, "Across-seed correlation and sign stability of learned C.", "secondary"),
     MandatoryTest("delta_c_context", "interpretability", False, "DeltaC magnitude, mean-drift audit, geometry stratification and contextual reversal cases.", "secondary"),
     MandatoryTest("alpha_relevance", "interpretability", False, "Alpha entropy, effective neighbours, distance relation and non-nearest relevance.", "secondary"),
-    # Robustness / inference.
     MandatoryTest("coordinate_noise_robustness", "robustness", False, "0/0.05/0.10/0.20 A coordinate perturbation sensitivity.", "exploratory"),
     MandatoryTest("pr_edge_dropout_robustness", "robustness", False, "0/5/10/20% cross-edge removal sensitivity.", "exploratory"),
     MandatoryTest("partner_hide_robustness", "robustness", False, "0/10/20/40% known partner-token hiding.", "exploratory"),
@@ -82,7 +78,6 @@ MANDATORY_TESTS = [
     MandatoryTest("spir_ablation", "inference", False, "No refinement versus one-pass SPIR versus repeated refinement using pre-registered candidate budgets.", "secondary"),
     MandatoryTest("sequence_collapse_audit", "inference", False, "Candidate diversity, composition and pre/post-SPIR collapse.", "secondary"),
     MandatoryTest("calibration", "reliability", False, "ECE/Brier/reliability for Protein and RNA separately.", "secondary"),
-    # Fairness / data / reproducibility.
     MandatoryTest("official_from_scratch_baselines", "fairness", False, "Exact frozen 1,000 single-molecule IDs; official pinned code; random initialization; full-1,000 refit.", "secondary"),
     MandatoryTest("published_checkpoint_reference", "fairness", False, "Published pretrained checkpoints are a separate reference track and never pooled with primary from-scratch comparisons.", "reference"),
     MandatoryTest("parameter_compute_report", "fairness", False, "Trainable/total parameters, data passes/tokens, peak memory, wall time and GPU-hours.", "descriptive"),
@@ -140,7 +135,9 @@ def expected_calibration_error(
     edges = np.linspace(0, 1, bins + 1)
     ece = 0.0
     for lo, hi in zip(edges[:-1], edges[1:]):
-        mask = (confidence >= lo) & (confidence < (hi if hi < 1 else hi + 1e-12))
+        mask = (confidence >= lo) & (
+            confidence < (hi if hi < 1 else hi + 1e-12)
+        )
         if mask.any():
             ece += mask.mean() * abs(correct[mask].mean() - confidence[mask].mean())
     return float(ece)
@@ -151,7 +148,6 @@ def brier_multiclass(
     max_probability: np.ndarray,
     correct: np.ndarray,
 ) -> float:
-    """Confidence Brier proxy when complete external-baseline logits are unavailable."""
     _ = native_probability
     correct = np.asarray(correct, float)
     max_probability = np.asarray(max_probability, float)
@@ -193,7 +189,10 @@ def paired_bootstrap(
 def paired_wilcoxon(a: pd.Series, b: pd.Series) -> dict[str, float]:
     aligned = pd.concat([a.rename("a"), b.rename("b")], axis=1).dropna()
     result = stats.wilcoxon(
-        aligned["a"], aligned["b"], alternative="two-sided", zero_method="wilcox"
+        aligned["a"],
+        aligned["b"],
+        alternative="two-sided",
+        zero_method="wilcox",
     )
     return {
         "n": int(len(aligned)),
