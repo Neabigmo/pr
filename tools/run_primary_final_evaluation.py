@@ -3,7 +3,7 @@
 
 The script verifies config/test-manifest hashes from EVALUATION_PROTOCOL_LOCK.json,
 then runs Tier A on every primary refit seed and Tier B only on the predeclared
-analysis seed.  It never trains or selects a checkpoint.
+analysis seed. It never trains or selects a checkpoint.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
 from pr_pilot.evaluation.full_suite import run_full_suite
@@ -46,7 +47,6 @@ def main() -> None:
     if ready.get("status") != "PRIMARY_TRAINING_COMPLETE_FINAL_TEST_STILL_LOCKED":
         raise ValueError("training-ready file is not a valid pre-final status record")
 
-    base = yaml.safe_load(args.config.read_text(encoding="utf-8"))
     expected_seeds = [int(x) for x in lock["primary_training_seeds"]]
     runs = {int(row["seed"]): row for row in ready["runs"]}
     if sorted(runs) != sorted(expected_seeds):
@@ -85,12 +85,10 @@ def main() -> None:
                 tier_b_cfg,
                 checkpoint,
                 args.test_manifest,
-                args.dev_manifest,
                 seed_out / "tier_b_full_battery",
-                args.device,
+                dev_manifest=args.dev_manifest,
+                device=args.device,
             )
-
-    import pandas as pd
 
     pd.DataFrame(run_manifest).to_csv(
         args.out / "primary_runs.tsv", sep="\t", index=False
