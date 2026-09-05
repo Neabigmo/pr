@@ -19,7 +19,7 @@ sampling:
   complex_train: 900
   complex_val: 100
   final_refit_on_full_dev: true
-  final_refit_rule: "use validation-selected epoch count; no further hyperparameter selection"
+  final_refit_rule: "use validation-selected epoch count; replay the development schedule prefix without compression"
   forbid_predicted_structures: true
 
 structure_filters:
@@ -70,8 +70,6 @@ masking:
   min_fraction: 0.10
   max_fraction: 1.00
   curriculum: true
-  # Exact 100% masking must appear with non-zero probability; a continuous
-  # Uniform(0.1,1.0) draw would otherwise almost never produce full-mask input.
   full_mask_probability: 0.15
   random_mask_probability: 0.70
   local_patch_probability: 0.30
@@ -87,8 +85,6 @@ loss:
   normalize_rna_by_log_alphabet: true
   equalize_interface_noninterface_groups: true
   equalize_protein_rna_in_joint: true
-  # Primary C learning does not need an adaptive L2 term; keep this disabled.
-  # If studied later, use a fixed coefficient selected on development data only.
   c_l2_enabled: false
   c_l2_target_fraction: 0.02
   delta_c_norm_penalty: 0.0
@@ -101,7 +97,9 @@ optimization:
   lr_projections: 0.0005
   lr_encoder_top: 0.0001
   lr_encoder_bottom: 0.00002
-  lr_global_c_joint: 0.00001
+  # Retained for backwards-compatible config parsing only. Primary joint training
+  # never includes C in the optimizer; C is frozen after the GLOBAL_C stage.
+  lr_global_c_joint: 0.0
   weight_decay: 0.01
   warmup_fraction: 0.04
   schedule: cosine
@@ -122,9 +120,9 @@ training_stages:
     enabled: true
     max_epochs: 80
     conditional_task_ratio: [1, 1]
-    # In the later half of C learning, 20% of samples use the most structurally
-    # surprising interface positions; partner scrambling remains evaluation-only.
-    hard_context_fraction_late: 0.20
+    # Primary C is a population/global anchor. Hard-context mining would change
+    # its estimand, so it is disabled in the primary experiment.
+    hard_context_fraction_late: 0.0
     lambda_fixed_to_one: true
   delta_c:
     enabled: true
@@ -138,6 +136,7 @@ training_stages:
     zero_init_score_residual: true
     hard_context_fraction_late: 0.0
     lambda_fixed_to_one: true
+    freeze_interaction_and_delta: true
   joint:
     enabled: true
     max_epochs: 150
@@ -145,11 +144,9 @@ training_stages:
     task_ratio_end: [1, 1, 1]
     gradual_unfreezing: true
     learn_bounded_lambda: true
+    freeze_global_c: true
 
 fairness_controls:
-  # Primary evidence for DM-ICF comes from same-data internal controls. External
-  # ProteinMPNN/NA-MPNN runs are important references but do not receive partner
-  # identity, so they are not the sole causal controls for DM-ICF.
   partner_blind_complex_control: true
   no_partner_identity_capacity_control: true
   global_c_backbone_only_context_control: true
