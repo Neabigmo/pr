@@ -2,21 +2,23 @@
   "proteinmpnn": {
     "name": "ProteinMPNN",
     "repository": "https://github.com/dauparas/ProteinMPNN",
-    "commit": "REPLACE_WITH_IMMUTABLE_SHA_BEFORE_RUNNING",
+    "commit": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
     "checkout": "third_party/proteinmpnn",
+    "training_entrypoint": "training/training.py",
     "use_published_pretrained_weights_in_primary_baseline": false
   },
   "rna_fixbb": {
     "name": "MPNN-fixbb / NA-MPNN",
     "repository": "https://github.com/baker-laboratory/NA-MPNN",
-    "commit": "REPLACE_WITH_IMMUTABLE_SHA_BEFORE_RUNNING",
+    "commit": "9fabc2482092b725e067969fba21297a806b6fda",
     "checkout": "third_party/na_mpnn",
+    "training_entrypoint": "na_run.py",
     "use_published_pretrained_weights_in_primary_baseline": false
   },
   "rules": [
-    "Copy this file to third_party/LOCK.json before the first reported run.",
-    "Never update an upstream checkout without updating the lock and starting a new experiment version.",
-    "Record exact upstream train/inference commands in artifacts.",
-    "Primary small-data comparison is from random initialization; published weights may be a separate secondary baseline only."
+    "The pilot is already frozen to these immutable upstream SHAs; third_party/LOCK.json is authoritative.",
+    "If either upstream commit changes, create a new experiment/data version rather than silently editing an existing reported run.",
+    "Record exact upstream commands, seed, lock SHA and prepared-manifest SHA in artifacts.",
+    "Primary small-data comparison starts from random initialization; published weights are a separate secondary reference only."
   ]
 }

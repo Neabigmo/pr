@@ -1,4 +1,14 @@
-"""Stage orchestration and optimizer ownership for DM-ICF."""
+"""Stage orchestration and optimizer ownership for DM-ICF.
+
+Primary scientific ownership is deliberately strict:
+C -> (q, DeltaC) -> alpha -> joint coordination.
+The global C anchor remains frozen during the primary joint stage.
+
+Callers that know whether Joint starts from a pretrained checkpoint should pass
+``scratch_joint`` explicitly.  A backward-compatible zero-head fallback is kept
+only for the generic scratch component path; ambiguous controls pass an explicit
+False and are contract-tested.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,7 +45,7 @@ CONTRACTS = {
     Stage.GLOBAL_C: StageContract(Stage.GLOBAL_C, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("predicted_structures", "test_manifest", "learned_delta_c", "learned_alpha")),
     Stage.DELTA_C: StageContract(Stage.DELTA_C, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("test_manifest", "learned_alpha")),
     Stage.ALPHA: StageContract(Stage.ALPHA, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("test_manifest",)),
-    Stage.JOINT: StageContract(Stage.JOINT, "complex_train", ("protein_conditional", "rna_conditional", "joint"), "complex_val_composite_normalized_nll", ("test_manifest",)),
+    Stage.JOINT: StageContract(Stage.JOINT, "complex_train", ("protein_conditional", "rna_conditional", "joint"), "complex_val_sequential_pseudonll", ("test_manifest",)),
 }
 
 
@@ -44,22 +54,44 @@ def _set_module(module: nn.Module, value: bool) -> None:
         p.requires_grad = value
 
 
-def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> dict[str, int]:
-    """Release pretrained encoders from output-proximal layers toward inputs.
+def set_all_trainable(model: JointPriorAndFieldModel, value: bool = True) -> None:
+    for p in model.parameters():
+        p.requires_grad = value
 
-    Contextual heads, token-context decoders and output heads are trainable from
-    joint step 0. Encoder message/update blocks are released progressively. Raw
-    node/edge projections are released only in the last 20% of joint training.
-    """
+
+def _tensor_is_exact_zero(tensor: torch.Tensor) -> bool:
+    return bool(torch.count_nonzero(tensor.detach()).item() == 0)
+
+
+def _fallback_fresh_scratch_signature(model: JointPriorAndFieldModel) -> bool:
+    return (
+        _tensor_is_exact_zero(model.dmicf.delta.out.weight)
+        and _tensor_is_exact_zero(model.dmicf.delta.out.bias)
+        and _tensor_is_exact_zero(model.dmicf.relevance.score.weight)
+        and _tensor_is_exact_zero(model.dmicf.relevance.score.bias)
+    )
+
+
+def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> dict[str, int]:
+    if bool(getattr(model, "_scratch_joint_mode", False)):
+        set_all_trainable(model, True)
+        return {"protein": len(model.protein_encoder.message), "rna": len(model.rna_encoder.message)}
+
     progress = float(min(max(progress, 0.0), 1.0))
-    for module in [model.dmicf, model.protein_decoder, model.rna_decoder, model.protein_head, model.rna_head]:
+    _set_module(model.dmicf, False)
+    _set_module(model.dmicf.interaction, True)
+    _set_module(model.dmicf.delta, True)
+    _set_module(model.dmicf.relevance, True)
+    model.dmicf.raw_lambda_p.requires_grad = True
+    model.dmicf.raw_lambda_r.requires_grad = True
+    model.dmicf.global_c.raw.requires_grad = False
+    for module in [model.protein_decoder, model.rna_decoder, model.protein_head, model.rna_head]:
         _set_module(module, True)
 
-    released = {}
+    released: dict[str, int] = {}
     for name, enc in [("protein", model.protein_encoder), ("rna", model.rna_encoder)]:
         _set_module(enc, False)
         n = len(enc.message)
-        # start with the top block, then release one-by-one.
         n_release = min(n, max(1, int(math.ceil(progress * n))))
         for idx in range(n - n_release, n):
             _set_module(enc.message[idx], True)
@@ -72,10 +104,27 @@ def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> d
     return released
 
 
-def configure_stage(model: JointPriorAndFieldModel, stage: Stage) -> StageContract:
+def configure_stage(
+    model: JointPriorAndFieldModel,
+    stage: Stage,
+    *,
+    scratch_joint: bool | None = None,
+) -> StageContract:
+    if scratch_joint is not None and stage != Stage.JOINT:
+        raise ValueError("scratch_joint is valid only for Stage.JOINT")
     set_trainable_stage(model, stage.value)
-    if stage == Stage.JOINT:
-        apply_joint_unfreezing(model, 0.0)
+    if stage == Stage.ALPHA:
+        _set_module(model.dmicf.interaction, False)
+        _set_module(model.dmicf.delta, False)
+        _set_module(model.dmicf.global_c, False)
+        _set_module(model.dmicf.relevance, True)
+    elif stage == Stage.JOINT:
+        scratch = _fallback_fresh_scratch_signature(model) if scratch_joint is None else bool(scratch_joint)
+        model._scratch_joint_mode = scratch
+        if scratch:
+            set_all_trainable(model, True)
+        else:
+            apply_joint_unfreezing(model, 0.0)
     return CONTRACTS[stage]
 
 
@@ -98,12 +147,11 @@ def _group(params: list[nn.Parameter], lr: float, wd: float) -> dict:
 
 
 def _encoder_layer_groups(enc: SimpleSparseBackboneEncoder, top_lr: float, bottom_lr: float, decay: float, wd: float) -> list[dict]:
-    """Layer-wise discriminative LR; includes frozen params for later release."""
     n = len(enc.message)
     groups: list[dict] = []
     for idx in range(n):
         depth_from_top = n - 1 - idx
-        lr = max(bottom_lr, top_lr * (decay ** depth_from_top))
+        lr = max(bottom_lr, top_lr * (decay**depth_from_top))
         groups.append(_group(_params(enc.message[idx], False) + _params(enc.update[idx], False), lr, wd))
     groups.append(_group(_params(enc.norm, False), max(bottom_lr, top_lr * decay), wd))
     groups.append(_group(_params(enc.node_proj, False) + _params(enc.edge_proj, False), bottom_lr, wd))
@@ -123,31 +171,15 @@ def build_optimizer(
 ) -> torch.optim.Optimizer:
     groups: list[dict] = []
     if stage == Stage.PROTEIN_PRIOR:
-        groups += [
-            _group(_params(model.protein_encoder), lr_encoder_top, weight_decay),
-            _group(_params(model.protein_decoder), lr_encoder_top, weight_decay),
-            _group(_params(model.protein_head), lr_heads, weight_decay),
-        ]
+        groups += [_group(_params(model.protein_encoder), lr_encoder_top, weight_decay), _group(_params(model.protein_decoder), lr_encoder_top, weight_decay), _group(_params(model.protein_head), lr_heads, weight_decay)]
     elif stage == Stage.RNA_PRIOR:
-        groups += [
-            _group(_params(model.rna_encoder), lr_encoder_top, weight_decay),
-            _group(_params(model.rna_decoder), lr_encoder_top, weight_decay),
-            _group(_params(model.rna_head), lr_heads, weight_decay),
-        ]
+        groups += [_group(_params(model.rna_encoder), lr_encoder_top, weight_decay), _group(_params(model.rna_decoder), lr_encoder_top, weight_decay), _group(_params(model.rna_head), lr_heads, weight_decay)]
     elif stage == Stage.GLOBAL_C:
-        # Gains are fixed at exactly one here; otherwise lambda*C is scale-degenerate.
         groups.append(_group([model.dmicf.global_c.raw], lr_heads, 0.0))
     elif stage == Stage.DELTA_C:
-        groups += [
-            _group(_params(model.dmicf.interaction), lr_heads, weight_decay),
-            _group(_params(model.dmicf.delta), lr_heads, weight_decay),
-        ]
+        groups += [_group(_params(model.dmicf.interaction), lr_heads, weight_decay), _group(_params(model.dmicf.delta), lr_heads, weight_decay)]
     elif stage == Stage.ALPHA:
-        groups += [
-            _group(_params(model.dmicf.interaction), lr_heads, weight_decay),
-            _group(_params(model.dmicf.delta), lr_heads, weight_decay),
-            _group(_params(model.dmicf.relevance), lr_heads, weight_decay),
-        ]
+        groups.append(_group(_params(model.dmicf.relevance), lr_heads, weight_decay))
     elif stage == Stage.JOINT:
         groups += [
             _group(_params(model.dmicf.interaction, False), lr_heads, weight_decay),
@@ -159,7 +191,7 @@ def build_optimizer(
             _group(_params(model.rna_head, False), lr_projections, weight_decay),
             *_encoder_layer_groups(model.protein_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
             *_encoder_layer_groups(model.rna_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
-            _group([model.dmicf.global_c.raw], lr_global_c_joint, 0.0),
+            _group([model.dmicf.global_c.raw], lr_projections if bool(getattr(model, "_scratch_joint_mode", False)) else lr_global_c_joint, 0.0),
             _group([model.dmicf.raw_lambda_p, model.dmicf.raw_lambda_r], lr_projections, 0.0),
         ]
     else:

@@ -2,8 +2,6 @@ experiment:
   name: dmicf_mini_pilot
   pilot_seed: 20260905
   strict_mode: true
-  output_root: artifacts
-  fail_on_test_leakage: true
   primary_training_seeds: [20260905, 20260906, 20260907]
 
 sampling:
@@ -18,36 +16,23 @@ sampling:
   complex_test: 100
   complex_train: 900
   complex_val: 100
-  final_refit_on_full_dev: true
-  final_refit_rule: "use validation-selected epoch count; no further hyperparameter selection"
-  forbid_predicted_structures: true
 
 structure_filters:
   exclude_ribosome: true
   exclude_spliceosome: true
-  require_biological_assembly: true
   protein_min_length: 30
   protein_max_length: 1000
   rna_min_length: 5
   rna_max_length: 500
   max_total_tokens: 1000
   max_resolution_angstrom: 4.0
-  preferred_resolution_angstrom: 3.5
   allow_nmr_without_resolution: true
-  require_interface_contact: true
   interface_contact_angstrom: 6.0
   min_interfacial_residue_pairs: 3
   max_interface_missing_fraction: 0.10
 
 leakage:
-  protein_strict_cluster: P30
-  rna_sequence_cluster: R80
-  require_rfam_holdout_when_available: true
   strict_validation: true
-  purge_final_test_from_single_molecule_pretraining: true
-  group_conformers: true
-  group_mutation_series: true
-  group_exact_pair: true
 
 geometry:
   hidden_dim: 256
@@ -64,14 +49,11 @@ geometry:
   pr_edge_dropout: 0.05
   drop_path: 0.05
   rich_pr_geometry: true
-  prohibit_rna_base_identity_atoms: true
 
 masking:
   min_fraction: 0.10
   max_fraction: 1.00
   curriculum: true
-  # Exact 100% masking must appear with non-zero probability; a continuous
-  # Uniform(0.1,1.0) draw would otherwise almost never produce full-mask input.
   full_mask_probability: 0.15
   random_mask_probability: 0.70
   local_patch_probability: 0.30
@@ -82,16 +64,8 @@ masking:
 loss:
   protein_label_smoothing: 0.05
   rna_label_smoothing: 0.05
-  global_c_label_smoothing: 0.0
-  normalize_protein_by_log_alphabet: true
-  normalize_rna_by_log_alphabet: true
-  equalize_interface_noninterface_groups: true
-  equalize_protein_rna_in_joint: true
-  # Primary C learning does not need an adaptive L2 term; keep this disabled.
-  # If studied later, use a fixed coefficient selected on development data only.
   c_l2_enabled: false
   c_l2_target_fraction: 0.02
-  delta_c_norm_penalty: 0.0
   alpha_entropy_warmup_weight: 0.01
   alpha_entropy_warmup_fraction: 0.10
 
@@ -101,6 +75,8 @@ optimization:
   lr_projections: 0.0005
   lr_encoder_top: 0.0001
   lr_encoder_bottom: 0.00002
+  # Primary joint freezes global C. This value is retained for optimizer schema
+  # compatibility; fresh scratch joint uses lr_projections for C automatically.
   lr_global_c_joint: 0.00001
   weight_decay: 0.01
   warmup_fraction: 0.04
@@ -121,53 +97,25 @@ training_stages:
   global_c:
     enabled: true
     max_epochs: 80
-    conditional_task_ratio: [1, 1]
-    # In the later half of C learning, 20% of samples use the most structurally
-    # surprising interface positions; partner scrambling remains evaluation-only.
-    hard_context_fraction_late: 0.20
-    lambda_fixed_to_one: true
+    hard_context_fraction_late: 0.0
   delta_c:
     enabled: true
     max_epochs: 100
-    zero_init_output: true
     hard_context_fraction_late: 0.0
-    lambda_fixed_to_one: true
   alpha:
     enabled: true
     max_epochs: 80
-    zero_init_score_residual: true
     hard_context_fraction_late: 0.0
-    lambda_fixed_to_one: true
   joint:
     enabled: true
     max_epochs: 150
     task_ratio_start: [2, 2, 1]
     task_ratio_end: [1, 1, 1]
     gradual_unfreezing: true
-    learn_bounded_lambda: true
-
-fairness_controls:
-  # Primary evidence for DM-ICF comes from same-data internal controls. External
-  # ProteinMPNN/NA-MPNN runs are important references but do not receive partner
-  # identity, so they are not the sole causal controls for DM-ICF.
-  partner_blind_complex_control: true
-  no_partner_identity_capacity_control: true
-  global_c_backbone_only_context_control: true
-  parameter_count_report: true
-  rich_geometry_vs_distance_only: true
-  fixed_distance_alpha_vs_learned_alpha: true
-  fixed_training_pmi_matrix_baseline: true
-  official_baselines_primary_from_scratch: true
-  official_baselines_use_same_single_molecule_ids: true
-  baseline_final_refit_on_full_1000: true
-  external_published_checkpoints_report_separately: true
-  matched_candidate_budget: true
-  matched_external_predictor_budget: true
 
 inference:
   candidates_per_complex: 64
   initial_temperature: 1.0
-  random_mixed_order: true
   spir:
     enabled: true
     reopen_fraction: 0.30
@@ -177,6 +125,8 @@ inference:
 
 evaluation:
   statistical_unit: complex
+  joint_validation_orders: 3
+  joint_validation_max_complexes: 32
   joint_teacher_forced_orders: 5
   scramble_repeats: 20
   counterfactual_max_partner_sites: 16
@@ -188,18 +138,34 @@ evaluation:
   pr_edge_drop_levels: [0.0, 0.05, 0.10, 0.20]
   partner_hide_levels: [0.0, 0.10, 0.20, 0.40]
   bootstrap_resamples: 10000
-  primary_multiple_testing: holm
-  exploratory_multiple_testing: bh
   data_efficiency_fractions: [0.10, 0.25, 0.50, 1.00]
-  run_partner_scramble: true
-  run_counterfactual_mutation: true
-  run_pmi_validation: true
-  run_delta_c_analysis: true
-  run_alpha_analysis: true
-  run_alpha_causal_edge_ablation: true
-  run_geometry_permutation_control: true
-  run_calibration: true
-  run_order_sensitivity: true
-  run_spir_ablation: true
-  run_partner_blind_control: true
-  run_capacity_control: true
+  analysis_seed: 20260905
+  primary_candidate_budget: 64
+  ablation_candidate_budget: 16
+  runtime_profile_complexes: 10
+  primary_hypotheses:
+    - H1_full_vs_dual_prior_interface_normalized_nll
+    - H2_full_vs_partner_blind_and_geometry_only
+    - H3_contextual_field_vs_global_C_only
+    - H4_partner_scramble_interface_delta_nll
+
+# Declarative scientific invariants are deliberately separated from runtime
+# knobs. They are enforced in code/tests and are not presented as fake booleans.
+protocol:
+  interface_definition: "canonical full-heavy-atom Protein-RNA contact <= 6.0 A; independent of PR message graph"
+  strict_split: "final100 frozen first; P30 + R80 + Rfam + exact sequence/mother-sample leakage prohibited"
+  pretraining_purge: "final-test homologues/families excluded from Protein/RNA prior pools before 1000-sample draw"
+  rna_model_view: "sugar-phosphate/base-sugar backbone only; native base-identity atoms prohibited"
+  global_c_initialization: "small random; no empirical PMI initialization"
+  global_c_primary_training: "C only, lambda=1, no hard-context mining, no label smoothing"
+  delta_stage: "train q/interaction + DeltaC with C/priors/alpha frozen; DeltaC output starts at exact zero"
+  alpha_stage: "train relevance residual + tau only; q/DeltaC/C/priors frozen"
+  primary_joint_stage: "C remains frozen; contextual heads adapt; pretrained encoders gradual-unfreeze; bounded lambdas learn"
+  scratch_control: "same architecture from random initialization; all parameters trainable from step 0"
+  loss_balance: "PI/PN/RI/RN mean separately; Protein/RNA normalized by log20/log4 before cross-polymer combination"
+  final_refit: "900/100 chooses epoch count; full1000 retraining replays identical development schedule prefix with no validation"
+  final_test: "immutable 100 complexes; never used for optimization, threshold selection, architecture changes or candidate-budget tuning"
+  confirmatory_statistics: "biological complex is the unit; H1-H4 only; Holm correction across four pre-registered hypotheses"
+  secondary_statistics: "broad metric tables are secondary/exploratory and may use BH/effect sizes/CI"
+  external_baselines: "official pinned ProteinMPNN and NA-MPNN start from scratch on the exact frozen single-molecule pools; they are one-sided references"
+  predicted_structures: "not used in this mini-pilot"

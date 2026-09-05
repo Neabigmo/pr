@@ -3,12 +3,10 @@
 
 ProteinMPNN sees only Protein coordinates and exports official backbone-only
 unconditional probabilities. NA-MPNN sees only RNA coordinates and exports the
-official specificity PPM. Both are converted into one common per-position table
-with native log-probability, prediction, recovery and original interface labels.
+official specificity PPM. Both are converted into one common per-position table.
 
-These are **external one-sided structural references**. They do not receive the
-partner identity and therefore are not substitutes for the same-data internal
-causal controls of DM-ICF.
+These are external *one-sided structural references*. They do not receive partner
+identity and therefore are not substitutes for same-data DM-ICF controls.
 """
 from __future__ import annotations
 
@@ -39,28 +37,38 @@ def _run(command: list[str], cwd: Path | None = None) -> None:
 def _clone_locked(repo_root: Path, third_party_root: Path) -> dict[str, Path]:
     lock = ensure_lock_file(repo_root)
     third_party_root.mkdir(parents=True, exist_ok=True)
-    result = {}
+    result: dict[str, Path] = {}
     for name in ["ProteinMPNN", "NA-MPNN"]:
         spec = pinned_upstream(name, lock)
-        checkout = third_party_root / ("ProteinMPNN" if name == "ProteinMPNN" else "NA-MPNN")
+        checkout = third_party_root / (
+            "ProteinMPNN" if name == "ProteinMPNN" else "NA-MPNN"
+        )
         if not checkout.exists():
             _run(["git", "clone", spec.url, str(checkout)])
         _run(["git", "fetch", "--all", "--tags"], checkout)
         _run(["git", "checkout", "--detach", spec.commit], checkout)
-        head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=checkout, text=True
+        ).strip()
         if head != spec.commit:
-            raise RuntimeError(f"Pinned checkout mismatch for {name}: {head} != {spec.commit}")
+            raise RuntimeError(
+                f"Pinned checkout mismatch for {name}: {head} != {spec.commit}"
+            )
         result[name] = checkout
     return result
 
 
-def _logsumexp(x: np.ndarray, axis: int = -1, keepdims: bool = False) -> np.ndarray:
+def _logsumexp(
+    x: np.ndarray, axis: int = -1, keepdims: bool = False
+) -> np.ndarray:
     maximum = np.max(x, axis=axis, keepdims=True)
     value = maximum + np.log(np.exp(x - maximum).sum(axis=axis, keepdims=True))
     return value if keepdims else np.squeeze(value, axis=axis)
 
 
-def _protein_rows(npz_path: Path, mapping: pd.DataFrame, sample_id: str, seed: int) -> list[dict]:
+def _protein_rows(
+    npz_path: Path, mapping: pd.DataFrame, sample_id: str, seed: int
+) -> list[dict]:
     data = np.load(npz_path, allow_pickle=True)
     log_p = np.asarray(data["log_p"])
     if log_p.ndim == 3:
@@ -72,7 +80,8 @@ def _protein_rows(npz_path: Path, mapping: pd.DataFrame, sample_id: str, seed: i
     mapping = mapping.sort_values("baseline_position")
     if len(mapping) != canonical.shape[0]:
         raise ValueError(
-            f"ProteinMPNN position count mismatch for {sample_id}: {canonical.shape[0]} vs {len(mapping)}"
+            f"ProteinMPNN position count mismatch for {sample_id}: "
+            f"{canonical.shape[0]} vs {len(mapping)}"
         )
     rows = []
     for position, item in enumerate(mapping.itertuples(index=False)):
@@ -91,22 +100,35 @@ def _protein_rows(npz_path: Path, mapping: pd.DataFrame, sample_id: str, seed: i
                 "is_interface": bool(item.is_interface),
                 "model": "ProteinMPNN_full1000",
                 "seed": int(seed),
-                "probability_semantics": "official backbone-only unconditional log probabilities; renormalized over 20 canonical amino acids",
+                "probability_semantics": (
+                    "official backbone-only unconditional log probabilities; "
+                    "renormalized over 20 canonical amino acids"
+                ),
             }
         )
     return rows
 
 
 def _rna_columns(restype_to_int: dict) -> list[int]:
-    # NA_SHARED_TOKENS=1 trains RNA on the shared DA/DC/DG/DT token slots.
-    if all(key in restype_to_int for key in ["DA", "DC", "DG", "DT"]):
-        return [int(restype_to_int[key]) for key in ["DA", "DC", "DG", "DT"]]
-    if all(key in restype_to_int for key in ["A", "C", "G", "U"]):
-        return [int(restype_to_int[key]) for key in ["A", "C", "G", "U"]]
-    raise ValueError(f"Cannot identify four RNA columns from restype_to_int={restype_to_int}")
+    """Return columns in this project's canonical A/U/G/C order.
+
+    With ``NA_SHARED_TOKENS=1`` upstream maps RNA A,C,G,U onto the DA,DC,DG,DT
+    token slots.  The correct canonical order is therefore DA,DT,DG,DC -- *not*
+    DA,DC,DG,DT.  Prefer RNA aliases when available because they already encode
+    the shared-token mapping.
+    """
+    if all(key in restype_to_int for key in ["A", "U", "G", "C"]):
+        return [int(restype_to_int[key]) for key in ["A", "U", "G", "C"]]
+    if all(key in restype_to_int for key in ["DA", "DT", "DG", "DC"]):
+        return [int(restype_to_int[key]) for key in ["DA", "DT", "DG", "DC"]]
+    raise ValueError(
+        f"Cannot identify A/U/G/C columns from restype_to_int={restype_to_int}"
+    )
 
 
-def _rna_rows(npz_path: Path, mapping: pd.DataFrame, sample_id: str, seed: int) -> list[dict]:
+def _rna_rows(
+    npz_path: Path, mapping: pd.DataFrame, sample_id: str, seed: int
+) -> list[dict]:
     data = np.load(npz_path, allow_pickle=True)
     ppm = np.asarray(data["predicted_ppm"], dtype=np.float64)
     if ppm.ndim == 3:
@@ -117,16 +139,23 @@ def _rna_rows(npz_path: Path, mapping: pd.DataFrame, sample_id: str, seed: int) 
     four = np.clip(four, 0.0, None)
     denom = four.sum(axis=-1, keepdims=True)
     if (denom <= 0).any():
-        raise ValueError(f"NA-MPNN produced zero four-base probability mass in {npz_path}")
+        raise ValueError(
+            f"NA-MPNN produced zero four-base probability mass in {npz_path}"
+        )
     four /= denom
 
-    rna_mask = np.asarray(data.get("rna_mask", np.ones(len(four), dtype=bool))).astype(bool)
+    rna_mask = np.asarray(
+        data.get("rna_mask", np.ones(len(four), dtype=bool))
+    ).astype(bool)
     if len(rna_mask) != len(four):
         raise ValueError("NA-MPNN rna_mask length mismatch")
     four = four[rna_mask]
     mapping = mapping.sort_values("baseline_position")
     if len(mapping) != four.shape[0]:
-        raise ValueError(f"NA-MPNN position count mismatch for {sample_id}: {four.shape[0]} vs {len(mapping)}")
+        raise ValueError(
+            f"NA-MPNN position count mismatch for {sample_id}: "
+            f"{four.shape[0]} vs {len(mapping)}"
+        )
 
     rows = []
     for position, item in enumerate(mapping.itertuples(index=False)):
@@ -140,12 +169,17 @@ def _rna_rows(npz_path: Path, mapping: pd.DataFrame, sample_id: str, seed: int) 
                 "original_residue_id": item.original_residue_id,
                 "native_token": native,
                 "predicted_token": predicted,
-                "native_log_probability": float(math.log(max(four[position, native], 1e-12))),
+                "native_log_probability": float(
+                    math.log(max(four[position, native], 1e-12))
+                ),
                 "max_probability": float(four[position, predicted]),
                 "is_interface": bool(item.is_interface),
                 "model": "NA-MPNN_full1000",
                 "seed": int(seed),
-                "probability_semantics": "official specificity PPM averaged over sampling trajectories; renormalized over A/U/G/C",
+                "probability_semantics": (
+                    "official specificity PPM averaged over sampling trajectories; "
+                    "renormalized over canonical A/U/G/C"
+                ),
             }
         )
     return rows
@@ -185,7 +219,16 @@ def _protein_command(
     ]
 
 
-def _na_command(repo: Path, checkpoint: Path, pdb: Path, out: Path, seed: int, batch_size: int) -> list[str]:
+def _na_command(
+    repo: Path,
+    checkpoint: Path,
+    pdb: Path,
+    out: Path,
+    seed: int,
+    batch_size: int,
+) -> list[str]:
+    # Every flag below is present in pinned inference/run.py.  In particular,
+    # there is no --rna_backbone_noise flag in that entrypoint.
     return [
         sys.executable,
         str(repo / "inference" / "run.py"),
@@ -199,7 +242,11 @@ def _na_command(repo: Path, checkpoint: Path, pdb: Path, out: Path, seed: int, b
         str(pdb),
         "--out_folder",
         str(out),
+        "--parse_na_only",
+        "1",
         "--design_na_only",
+        "1",
+        "--load_residues_with_missing_atoms",
         "1",
         "--output_pdbs",
         "0",
@@ -207,8 +254,6 @@ def _na_command(repo: Path, checkpoint: Path, pdb: Path, out: Path, seed: int, b
         "0",
         "--output_specificity",
         "1",
-        "--omit_AA",
-        "ARNDCQEGHILKMFPSTWYVX",
         "--temperature",
         "1.0",
         "--batch_size",
@@ -217,8 +262,6 @@ def _na_command(repo: Path, checkpoint: Path, pdb: Path, out: Path, seed: int, b
         "1",
         "--seed",
         str(seed),
-        "--rna_backbone_noise",
-        "0.0",
         "--catch_failed_inferences",
         "0",
     ]
@@ -245,7 +288,9 @@ def evaluate(
     for run in runs:
         seed = int(run["seed"])
         if "checkpoint" not in run.get("ProteinMPNN", {}) or "checkpoint" not in run.get("NA-MPNN", {}):
-            raise ValueError("Baseline summary lacks full-refit checkpoints; do not evaluate development weights")
+            raise ValueError(
+                "Baseline summary lacks full-refit checkpoints; do not evaluate development weights"
+            )
         protein_checkpoint = Path(run["ProteinMPNN"]["checkpoint"])
         rna_checkpoint = Path(run["NA-MPNN"]["checkpoint"])
         seed_out = output / f"seed{seed}"
@@ -309,10 +354,18 @@ def evaluate(
         token_path.parent.mkdir(parents=True, exist_ok=True)
         token_df.to_csv(token_path, sep="\t", index=False)
         all_rows.append(token_df)
-        run_manifest.append({"model": "external_one_sided_refs", "seed": seed, "run_dir": str(seed_out.resolve())})
+        run_manifest.append(
+            {
+                "model": "external_one_sided_refs",
+                "seed": seed,
+                "run_dir": str(seed_out.resolve()),
+            }
+        )
 
     combined = pd.concat(all_rows, ignore_index=True)
-    combined.to_csv(output / "all_seeds_external_one_sided_tokens.tsv", sep="\t", index=False)
+    combined.to_csv(
+        output / "all_seeds_external_one_sided_tokens.tsv", sep="\t", index=False
+    )
     summary = {
         "complexes": int(len(samples)),
         "seeds": sorted(combined.seed.astype(int).unique().tolist()),
@@ -320,9 +373,17 @@ def evaluate(
         "rna_rows": int((combined.polymer == "rna").sum()),
         "protein_reference": "ProteinMPNN backbone-only; no RNA partner",
         "rna_reference": "NA-MPNN RNA-only specificity PPM; no Protein partner",
-        "causal_comparison_warning": "Use DM-ICF internal partner-blind/component controls for causal cross-molecular claims; these external baselines solve one-sided tasks.",
+        "causal_comparison_warning": (
+            "Use DM-ICF internal partner-blind/component controls for cross-molecular "
+            "mechanistic claims; these external baselines solve one-sided tasks."
+        ),
     }
-    (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (output / "summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    pd.DataFrame(run_manifest).to_csv(
+        output / "run_manifest.tsv", sep="\t", index=False
+    )
     return summary
 
 
@@ -332,7 +393,9 @@ def main() -> None:
     parser.add_argument("--baseline-summary", type=Path, required=True)
     parser.add_argument("--prepared-holdout", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--third-party-root", type=Path, default=Path("third_party/checkouts"))
+    parser.add_argument(
+        "--third-party-root", type=Path, default=Path("third_party/checkouts")
+    )
     parser.add_argument("--na-probability-samples", type=int, default=64)
     args = parser.parse_args()
     print(

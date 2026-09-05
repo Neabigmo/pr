@@ -1,29 +1,19 @@
 """Same-data internal fairness controls for DM-ICF.
 
-Two controls reuse the *exact* model architecture, frozen manifests and staged
-optimizer schedule of the primary model.
+``partner_blind`` removes cross-molecular correction entirely. It starts from the
+same dual structural-prior checkpoint and goes directly through Joint adaptation;
+forcing it through C/Delta/Alpha would create stages with no active gradient.
 
-``partner_blind``
-    Cross-molecular correction is forced to zero. The model may still coordinate
-    its two pretrained structural encoders during complex training, but no partner
-    identity or PR-field output can affect token logits.
+``geometry_only`` retains q/DeltaC/alpha capacity and partner geometry but removes
+specific partner-token identity by averaging compatibility across the partner
+alphabet. It follows C -> Delta -> Alpha -> Joint like the primary interaction path.
 
-``geometry_only``
-    The full q_ij / DeltaC / alpha machinery remains trainable and receives both
-    partner backbones. However C+DeltaC is averaged across the partner alphabet
-    before aggregation, so no specific amino-acid/base identity is ever selected.
-    This is the capacity/extra-geometry control: comparable cross-structure neural
-    capacity without sequence coupling.
-
-Controls use the same C -> DeltaC -> alpha -> joint stages. Protein/RNA prior
-checkpoints are shared with the primary seed so the comparison isolates the
-cross-molecular mechanism rather than stochastic prior differences.
+Both controls use the exact frozen manifests and schedule-prefix full-1000 refit.
 """
 from __future__ import annotations
 
 from pathlib import Path
 import json
-import math
 import random
 import types
 
@@ -40,7 +30,11 @@ from pr_pilot.training.engine import (
     build_model_from_config,
     validate_stage,
 )
-from pr_pilot.training.refit import selected_epoch_count
+from pr_pilot.training.refit import (
+    development_schedule_horizon,
+    schedule_progress,
+    selected_epoch_count,
+)
 from pr_pilot.training.stages import (
     Stage,
     apply_joint_unfreezing,
@@ -50,11 +44,11 @@ from pr_pilot.training.stages import (
 )
 
 
-CONTROL_STAGES = [Stage.GLOBAL_C, Stage.DELTA_C, Stage.ALPHA, Stage.JOINT]
+GEOMETRY_CONTROL_STAGES = [Stage.GLOBAL_C, Stage.DELTA_C, Stage.ALPHA, Stage.JOINT]
+PARTNER_BLIND_STAGES = [Stage.JOINT]
 
 
 def install_control_mode(model: JointPriorAndFieldModel, mode: str) -> None:
-    """Replace only cross-molecular output semantics; leave architecture intact."""
     if mode not in {"partner_blind", "geometry_only"}:
         raise ValueError("mode must be partner_blind or geometry_only")
     original = model.forward
@@ -68,21 +62,18 @@ def install_control_mode(model: JointPriorAndFieldModel, mode: str) -> None:
             out["rna_logits"] = out["rna_struct_logits"]
             return out
 
-        # Positional forward contract: PRBatch is argument 6.
         if len(args) < 7:
             raise ValueError("Controlled forward requires the standard positional JointPriorAndFieldModel call")
         pr = args[6]
         cedge = out["C"].unsqueeze(0) + out["DeltaC"]
 
-        # Protein correction independent of RNA token identity: average over all
-        # four possible partner bases before alpha aggregation.
+        # Average over partner alphabet: partner geometry and extra network capacity
+        # remain, but the actual partner AA/base identity cannot affect correction.
         p_edge = cedge.mean(dim=-1) * out["alpha_p"][:, None]
         p_delta = torch.zeros_like(out["protein_struct_logits"])
         p_delta.index_add_(0, pr.protein_index, p_edge)
         p_delta = self.dmicf.lambda_p * p_delta
 
-        # RNA correction independent of Protein token identity: average over all
-        # twenty possible partner amino acids.
         r_edge = cedge.mean(dim=-2) * out["alpha_r"][:, None]
         r_delta = torch.zeros_like(out["rna_struct_logits"])
         r_delta.index_add_(0, pr.rna_index, r_edge)
@@ -117,7 +108,10 @@ def _load_control_model(cfg: dict, checkpoint: Path, stage: Stage, mode: str, de
     model = build_model_from_config(cfg).to(device)
     payload = torch.load(checkpoint, map_location="cpu")
     model.load_state_dict(payload["model"])
-    configure_stage(model, stage)
+    # Every internal control starts from an actual pretrained checkpoint. This
+    # explicit False prevents zero unused interaction heads in the dual-prior
+    # checkpoint from being mistaken for a scratch model.
+    configure_stage(model, stage, scratch_joint=False if stage == Stage.JOINT else None)
     install_control_mode(model, mode)
     return model
 
@@ -132,9 +126,9 @@ def train_control_stage(
     out_dir: Path,
     device: str | None = None,
 ) -> Path:
-    """Development training with validation-selected epoch, mirroring primary stage."""
-    if stage not in CONTROL_STAGES:
-        raise ValueError(f"Control mode applies only to {CONTROL_STAGES}")
+    allowed = PARTNER_BLIND_STAGES if mode == "partner_blind" else GEOMETRY_CONTROL_STAGES
+    if stage not in allowed:
+        raise ValueError(f"{mode} control stage {stage.value} is invalid; allowed={allowed}")
     seed = int(cfg["experiment"]["pilot_seed"])
     random.seed(seed)
     np.random.seed(seed)
@@ -147,7 +141,7 @@ def train_control_stage(
     base_lrs = [float(group["lr"]) for group in optimizer.param_groups]
     train_table = ManifestTable(train_manifest)
     val_table = ManifestTable(val_manifest)
-    max_epochs = int(cfg["training_stages"][stage.value]["max_epochs"])
+    max_epochs = development_schedule_horizon(cfg, stage)
     patience = int(cfg["optimization"]["early_stopping_patience"])
     total_steps = max_epochs * max(1, len(train_table))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -159,7 +153,7 @@ def train_control_stage(
 
     for epoch in range(max_epochs):
         model.train()
-        progress = epoch / max(1, max_epochs - 1)
+        progress = schedule_progress(epoch, max_epochs)
         if stage == Stage.JOINT:
             apply_joint_unfreezing(model, progress)
         adapter = _adapter(cfg, epoch, training=True)
@@ -170,8 +164,8 @@ def train_control_stage(
             optimizer.zero_grad(set_to_none=True)
             with _autocast(cfg, dev):
                 loss, _ = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev)
-            if not torch.isfinite(loss):
-                raise FloatingPointError(f"Non-finite {mode} loss at {stage.value} {row.sample_id}")
+            if not torch.isfinite(loss) or not loss.requires_grad:
+                raise FloatingPointError(f"Invalid {mode} loss at {stage.value} {row.sample_id}; requires_grad={loss.requires_grad}")
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad and p.grad is not None],
@@ -179,19 +173,16 @@ def train_control_stage(
             )
             optimizer.step()
             global_step += 1
-            _cosine_schedule(
-                optimizer,
-                global_step,
-                total_steps,
-                float(cfg["optimization"]["warmup_fraction"]),
-                base_lrs,
-            )
+            _cosine_schedule(optimizer, global_step, total_steps, float(cfg["optimization"]["warmup_fraction"]), base_lrs)
             losses.append(float(loss.detach().cpu()))
+
         val = validate_stage(model, stage, val_table, cfg, dev)
         record = {
             "control_mode": mode,
             "stage": stage.value,
             "epoch": epoch,
+            "schedule_horizon_epochs": max_epochs,
+            "schedule_progress": progress,
             "train_loss": float(np.mean(losses)),
             "val_metric": val,
             "trainable": trainable_parameter_report(model),
@@ -207,6 +198,8 @@ def train_control_stage(
                     "stage": stage.value,
                     "control_mode": mode,
                     "epoch": epoch,
+                    "schedule_horizon_epochs": max_epochs,
+                    "schedule_progress": progress,
                     "val_metric": val,
                     "config": cfg,
                 },
@@ -231,8 +224,10 @@ def refit_control_stage(
     out_dir: Path,
     device: str | None = None,
 ) -> Path:
-    """Validation-free full-1000 refit for one control stage."""
     epochs = selected_epoch_count(selected_dev_checkpoint)
+    horizon = development_schedule_horizon(cfg, stage)
+    if epochs > horizon:
+        raise ValueError("Selected control epoch exceeds schedule horizon")
     seed = int(cfg["experiment"]["pilot_seed"])
     random.seed(seed)
     np.random.seed(seed)
@@ -244,13 +239,13 @@ def refit_control_stage(
     optimizer = _optimizer(model, stage, cfg)
     base_lrs = [float(group["lr"]) for group in optimizer.param_groups]
     table = ManifestTable(full_manifest)
-    total_steps = epochs * max(1, len(table))
+    total_steps = horizon * max(1, len(table))
     global_step = 0
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(epochs):
         model.train()
-        progress = epoch / max(1, epochs - 1)
+        progress = schedule_progress(epoch, horizon)
         if stage == Stage.JOINT:
             apply_joint_unfreezing(model, progress)
         adapter = _adapter(cfg, epoch, training=True)
@@ -260,6 +255,8 @@ def refit_control_stage(
             optimizer.zero_grad(set_to_none=True)
             with _autocast(cfg, dev):
                 loss, _ = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev)
+            if not loss.requires_grad:
+                raise RuntimeError(f"{mode}/{stage.value} refit produced a detached loss")
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad and p.grad is not None],
@@ -267,13 +264,7 @@ def refit_control_stage(
             )
             optimizer.step()
             global_step += 1
-            _cosine_schedule(
-                optimizer,
-                global_step,
-                total_steps,
-                float(cfg["optimization"]["warmup_fraction"]),
-                base_lrs,
-            )
+            _cosine_schedule(optimizer, global_step, total_steps, float(cfg["optimization"]["warmup_fraction"]), base_lrs)
 
     checkpoint = out_dir / "refit.pt"
     torch.save(
@@ -282,6 +273,9 @@ def refit_control_stage(
             "stage": stage.value,
             "control_mode": mode,
             "epoch": epochs - 1,
+            "selected_epoch_count": epochs,
+            "schedule_horizon_epochs": horizon,
+            "schedule_progress_at_stop": schedule_progress(epochs - 1, horizon),
             "refit": True,
             "validation_used": False,
             "config": cfg,
@@ -300,10 +294,10 @@ def run_control_pipeline(
     out_dir: Path,
     device: str | None = None,
 ) -> Path:
-    """Development-select and full-1000-refit one complete interaction control."""
+    stages = PARTNER_BLIND_STAGES if mode == "partner_blind" else GEOMETRY_CONTROL_STAGES
     dev_prev = primary_development_prior
     refit_prev = primary_refit_prior
-    for stage in CONTROL_STAGES:
+    for stage in stages:
         dev_stage = out_dir / "development" / stage.value
         dev_checkpoint = train_control_stage(
             cfg,
@@ -329,4 +323,18 @@ def run_control_pipeline(
         dev_prev = dev_checkpoint
         refit_prev = refit_checkpoint
     (out_dir / "FINAL_REFIT_CHECKPOINT.txt").write_text(str(refit_prev), encoding="utf-8")
+    (out_dir / "control_training_protocol.json").write_text(
+        json.dumps(
+            {
+                "mode": mode,
+                "stages": [stage.value for stage in stages],
+                "rationale": (
+                    "partner_blind adapts dual structural priors directly under complex joint masks; "
+                    "geometry_only retains the full interaction-capacity training path without partner-token identity"
+                ),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return refit_prev
