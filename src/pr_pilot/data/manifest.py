@@ -1,9 +1,14 @@
 """Manifest freezing, deterministic sampling and leakage guards.
 
-Scientific invariant: the final complex holdout is frozen *before* the protein
-and RNA pretraining pools. Test families are then purged from every pretraining
-pool. All selections use stable sample/group identifiers, never transient row
-indices.
+Scientific invariants
+---------------------
+1. The final 100-complex holdout is frozen *before* the 1,000-complex
+   development set and before both single-molecule pretraining pools.
+2. Protein P30 and RNA Rfam/R80 overlap is checked at the *constituent chain*
+   level. Semicolon-joined multi-chain labels are never treated as one opaque
+   string.
+3. Test homologues/families are purged from protein/RNA structural-prior pools.
+4. All randomisation is stable hash-based and independent of dataframe row order.
 """
 from __future__ import annotations
 
@@ -19,10 +24,19 @@ REQUIRED_COMMON = {"sample_id", "structure_path", "sequence", "sequence_hash"}
 REQUIRED_PROTEIN = REQUIRED_COMMON | {"protein_cluster_p30"}
 REQUIRED_RNA = REQUIRED_COMMON | {"rna_cluster_r80", "rfam_family"}
 REQUIRED_COMPLEX = {
-    "sample_id", "structure_path", "protein_sequence", "rna_sequence",
-    "protein_hash", "rna_hash", "protein_cluster_p30", "rna_cluster_r80",
-    "rfam_family", "mother_sample_id", "experimental",
+    "sample_id",
+    "structure_path",
+    "protein_sequence",
+    "rna_sequence",
+    "protein_hash",
+    "rna_hash",
+    "protein_cluster_p30",
+    "rna_cluster_r80",
+    "rfam_family",
+    "mother_sample_id",
+    "experimental",
 }
+UNKNOWN_LABELS = {"", "nan", "none", "unknown", "na", "n/a", ".", "?"}
 
 
 @dataclass(frozen=True)
@@ -58,16 +72,22 @@ def _require_columns(df: pd.DataFrame, required: set[str], name: str) -> None:
         raise ValueError(f"{name} manifest missing required columns: {missing}")
 
 
-def _known_rfam(value: object) -> bool:
-    s = str(value).strip().lower()
-    return s not in {"", "nan", "none", "unknown", "na"}
+def _labels(value: object) -> set[str]:
+    """Parse a semicolon-joined label field into non-empty constituent labels."""
+    if value is None:
+        return set()
+    text = str(value).strip()
+    if text.lower() in UNKNOWN_LABELS:
+        return set()
+    return {part.strip() for part in text.split(";") if part.strip() and part.strip().lower() not in UNKNOWN_LABELS}
 
 
-def _rna_holdout_key(row: pd.Series) -> str:
-    """Use biological family when known, otherwise sequence cluster."""
-    if _known_rfam(row.get("rfam_family", "")):
-        return f"rfam:{row['rfam_family']}"
-    return f"r80:{row['rna_cluster_r80']}"
+def _rna_holdout_labels(row: pd.Series) -> set[str]:
+    """Prefer all known Rfam families; fall back to all R80 chain clusters."""
+    rfam = _labels(row.get("rfam_family", ""))
+    if rfam:
+        return {f"rfam:{x}" for x in rfam}
+    return {f"r80:{x}" for x in _labels(row.get("rna_cluster_r80", ""))}
 
 
 def normalize_sequence(seq: str, alphabet: str) -> str:
@@ -86,7 +106,9 @@ def normalize_sequence(seq: str, alphabet: str) -> str:
 
 
 def deterministic_sample(df: pd.DataFrame, n: int, seed: int, key: str = "sample_id") -> pd.DataFrame:
-    """Stable hash sampling independent of input row order or pandas RNG."""
+    """Stable pseudo-random sample independent of input row order."""
+    if key not in df.columns:
+        raise ValueError(f"Sampling key {key!r} is missing")
     if len(df) < n:
         raise ValueError(f"Requested {n} rows but only {len(df)} eligible rows exist")
     if df[key].astype(str).duplicated().any():
@@ -107,11 +129,13 @@ def split_deterministic(df: pd.DataFrame, n_train: int, n_val: int, seed: int) -
 class _UnionFind:
     def __init__(self, n: int):
         self.parent = list(range(n))
+
     def find(self, x: int) -> int:
         while self.parent[x] != x:
             self.parent[x] = self.parent[self.parent[x]]
             x = self.parent[x]
         return x
+
     def union(self, a: int, b: int) -> None:
         ra, rb = self.find(a), self.find(b)
         if ra != rb:
@@ -119,11 +143,10 @@ class _UnionFind:
 
 
 def bilateral_components(df: pd.DataFrame) -> list[list[str]]:
-    """Connected components under shared P30 OR RNA-family/R80 key.
+    """Connected components under *any* shared P30 or RNA-family/R80 label.
 
-    A whole component must remain in one split. This is stricter and safer than
-    greedily testing row indices, and it prevents transitive leakage such as
-    P-family A -- RNA-family X -- P-family B across train/test.
+    This catches transitive leakage and multi-chain partial overlap. Example:
+    ``P30_A;P30_B`` and ``P30_A`` belong to the same component.
     """
     _require_columns(df, REQUIRED_COMPLEX, "complex")
     frame = df.reset_index(drop=True).copy()
@@ -131,16 +154,23 @@ def bilateral_components(df: pd.DataFrame) -> list[list[str]]:
     last_p: dict[str, int] = {}
     last_r: dict[str, int] = {}
     for i, row in frame.iterrows():
-        p = str(row["protein_cluster_p30"])
-        r = _rna_holdout_key(row)
-        if p in last_p:
-            uf.union(i, last_p[p])
-        else:
-            last_p[p] = i
-        if r in last_r:
-            uf.union(i, last_r[r])
-        else:
-            last_r[r] = i
+        p_labels = _labels(row["protein_cluster_p30"])
+        r_labels = _rna_holdout_labels(row)
+        if not p_labels:
+            raise ValueError(f"Complex {row['sample_id']} has no usable P30 label")
+        if not r_labels:
+            raise ValueError(f"Complex {row['sample_id']} has neither known Rfam nor usable R80 label")
+        for label in p_labels:
+            if label in last_p:
+                uf.union(i, last_p[label])
+            else:
+                last_p[label] = i
+        for label in r_labels:
+            if label in last_r:
+                uf.union(i, last_r[label])
+            else:
+                last_r[label] = i
+
     groups: dict[int, list[str]] = {}
     for i, sid in enumerate(frame["sample_id"].astype(str)):
         groups.setdefault(uf.find(i), []).append(sid)
@@ -148,20 +178,12 @@ def bilateral_components(df: pd.DataFrame) -> list[list[str]]:
 
 
 def _exact_component_subset(components: list[list[str]], target_n: int, seed: int) -> set[str]:
-    """Deterministically choose whole bilateral components totaling target_n.
-
-    Dynamic programming avoids the old bug where a shuffled candidate row index
-    was later interpreted as an index into a different dataframe.
-    """
-    ordered = sorted(
-        components,
-        key=lambda comp: sha256_text(f"{seed}|{'|'.join(sorted(comp))}"),
-    )
-    # sum -> component indices. Stop states above target_n.
+    """Choose whole bilateral components totalling exactly ``target_n`` rows."""
+    ordered = sorted(components, key=lambda comp: sha256_text(f"{seed}|{'|'.join(sorted(comp))}"))
     dp: dict[int, tuple[int, ...]] = {0: ()}
     for ci, comp in enumerate(ordered):
         size = len(comp)
-        for total, choice in list(dp.items())[::-1]:
+        for total, choice in list(dp.items()):
             new_total = total + size
             if new_total <= target_n and new_total not in dp:
                 dp[new_total] = choice + (ci,)
@@ -170,26 +192,32 @@ def _exact_component_subset(components: list[list[str]], target_n: int, seed: in
     if target_n not in dp:
         sizes = sorted(len(c) for c in components)
         raise RuntimeError(
-            f"Cannot form an exact bilateral component split of {target_n} complexes. "
-            f"Component sizes={sizes[:30]}{'...' if len(sizes) > 30 else ''}. "
-            "Change the pilot seed or enlarge the eligible/frozen pool; never split a component."
+            f"Cannot form an exact strict component holdout of {target_n}. "
+            f"Component sizes={sizes[:40]}{'...' if len(sizes) > 40 else ''}. "
+            "Enlarge the eligible candidate set or change the frozen seed; never split a component silently."
         )
     selected: set[str] = set()
     for ci in dp[target_n]:
         selected.update(ordered[ci])
+    if len(selected) != target_n:
+        raise AssertionError("Strict component selection size mismatch")
     return selected
 
 
 def bilateral_group_split(df: pd.DataFrame, n_holdout: int, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return remainder, strict bilateral holdout with exactly n_holdout rows."""
-    components = bilateral_components(df)
-    hold_ids = _exact_component_subset(components, n_holdout, seed)
+    """Return remainder and a strict bilateral holdout of exactly ``n_holdout``."""
+    hold_ids = _exact_component_subset(bilateral_components(df), n_holdout, seed)
     hold = df[df["sample_id"].astype(str).isin(hold_ids)].copy().reset_index(drop=True)
     remain = df[~df["sample_id"].astype(str).isin(hold_ids)].copy().reset_index(drop=True)
-    if len(hold) != n_holdout:
-        raise AssertionError("Bilateral component split size mismatch")
     assert_no_test_leakage(remain, pd.DataFrame(columns=remain.columns), hold, strict_cluster_check=True)
     return remain, hold
+
+
+def _flatten_column(df: pd.DataFrame, column: str) -> set[str]:
+    result: set[str] = set()
+    for value in df[column]:
+        result.update(_labels(value))
+    return result
 
 
 def _purge_pretraining_against_test(df: pd.DataFrame, molecule: str, test: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
@@ -197,16 +225,18 @@ def _purge_pretraining_against_test(df: pd.DataFrame, molecule: str, test: pd.Da
     if molecule == "protein":
         _require_columns(df, REQUIRED_PROTEIN, molecule)
         forbidden_hash = set(test["protein_hash"].astype(str))
-        forbidden_cluster = set(test["protein_cluster_p30"].astype(str))
-        keep = (~df["sequence_hash"].astype(str).isin(forbidden_hash)) & (~df["protein_cluster_p30"].astype(str).isin(forbidden_cluster))
+        forbidden_p30 = _flatten_column(test, "protein_cluster_p30")
+        keep = ~df["sequence_hash"].astype(str).isin(forbidden_hash)
+        keep &= ~df["protein_cluster_p30"].astype(str).map(lambda x: bool(_labels(x) & forbidden_p30))
     elif molecule == "rna":
         _require_columns(df, REQUIRED_RNA, molecule)
         forbidden_hash = set(test["rna_hash"].astype(str))
-        forbidden_r80 = set(test["rna_cluster_r80"].astype(str))
-        known_rfam = {str(x) for x in test["rfam_family"] if _known_rfam(x)}
-        keep = (~df["sequence_hash"].astype(str).isin(forbidden_hash)) & (~df["rna_cluster_r80"].astype(str).isin(forbidden_r80))
-        if known_rfam:
-            keep &= ~df["rfam_family"].astype(str).isin(known_rfam)
+        forbidden_r80 = _flatten_column(test, "rna_cluster_r80")
+        forbidden_rfam = _flatten_column(test, "rfam_family")
+        keep = ~df["sequence_hash"].astype(str).isin(forbidden_hash)
+        keep &= ~df["rna_cluster_r80"].astype(str).map(lambda x: bool(_labels(x) & forbidden_r80))
+        if forbidden_rfam:
+            keep &= ~df["rfam_family"].astype(str).map(lambda x: bool(_labels(x) & forbidden_rfam))
     else:
         raise ValueError("molecule must be 'protein' or 'rna'")
     out = df[keep].copy().reset_index(drop=True)
@@ -221,7 +251,7 @@ def freeze_single_molecule_pool(
     forbidden_test_path: Path,
     counts: FrozenCounts = FrozenCounts(),
 ) -> dict[str, Path]:
-    """Freeze a 1000-pool only after purging all final-test homologues/families."""
+    """Freeze a 1,000-structure prior pool after final-test purge."""
     df = pd.read_csv(eligible_path, sep=None, engine="python")
     test = pd.read_csv(forbidden_test_path, sep="\t")
     _require_columns(test, REQUIRED_COMPLEX, "complex_test")
@@ -234,13 +264,15 @@ def freeze_single_molecule_pool(
     pool = deterministic_sample(df, pool_n, seed)
     train, val = split_deterministic(pool, train_n, val_n, seed + 1)
     out_dir.mkdir(parents=True, exist_ok=True)
-    paths = {}
+    paths: dict[str, Path] = {}
     for label, frame in [("pool", pool), ("train", train), ("val", val)]:
         path = out_dir / f"{molecule}_{label}.tsv"
         frame.to_csv(path, sep="\t", index=False)
         paths[label] = path
     _write_manifest_meta(
-        out_dir / f"{molecule}_manifest_meta.json", seed, paths,
+        out_dir / f"{molecule}_manifest_meta.json",
+        seed,
+        paths,
         extra={"final_test_purge": purge_stats, "forbidden_test_sha256": sha256_file(forbidden_test_path)},
     )
     return paths
@@ -254,7 +286,7 @@ def freeze_complex_pool(
     require_strict_bilateral: bool = True,
     strict_validation: bool = True,
 ) -> dict[str, Path]:
-    """Freeze 1100 experimental complexes with stable bilateral group splits."""
+    """Freeze strict test first, then sample a non-overlapping 1,000-complex dev set."""
     df = pd.read_csv(eligible_path, sep=None, engine="python")
     _require_columns(df, REQUIRED_COMPLEX, "complex")
     if not df["experimental"].astype(bool).all():
@@ -264,26 +296,31 @@ def freeze_complex_pool(
     if df["mother_sample_id"].astype(str).duplicated().any():
         raise ValueError("Duplicate mother_sample_id values must be grouped before freezing")
 
-    pool = deterministic_sample(df, counts.complex_pool, seed)
     relaxations: list[dict] = []
     if require_strict_bilateral:
-        dev, test = bilateral_group_split(pool, counts.complex_test, seed + 17)
+        remainder, test = bilateral_group_split(df, counts.complex_test, seed + 17)
+        # Sampling dev *after* removing the complete test components preserves a
+        # genuinely strict holdout and still gives a deterministic random dev set.
+        dev = deterministic_sample(remainder, counts.complex_dev, seed + 19)
     else:
-        ranked = deterministic_sample(pool, len(pool), seed + 17)
+        pool_random = deterministic_sample(df, counts.complex_pool, seed)
+        ranked = deterministic_sample(pool_random, len(pool_random), seed + 17)
         test = ranked.iloc[: counts.complex_test].copy().reset_index(drop=True)
         dev = ranked.iloc[counts.complex_test :].copy().reset_index(drop=True)
         relaxations.append({"rule": "strict_bilateral", "reason": "explicitly_disabled"})
 
-    if len(dev) != counts.complex_dev:
-        raise AssertionError("Complex dev size mismatch")
+    if len(test) != counts.complex_test or len(dev) != counts.complex_dev:
+        raise AssertionError("Frozen complex counts are inconsistent")
+
     if strict_validation:
-        train, val = bilateral_group_split(dev, counts.complex_val, seed + 19)
+        train, val = bilateral_group_split(dev, counts.complex_val, seed + 23)
         if len(train) != counts.complex_train:
-            raise AssertionError("Complex train size mismatch")
+            raise AssertionError("Strict train/validation split size mismatch")
     else:
-        train, val = split_deterministic(dev, counts.complex_train, counts.complex_val, seed + 19)
+        train, val = split_deterministic(dev, counts.complex_train, counts.complex_val, seed + 23)
 
     assert_no_test_leakage(train, val, test, strict_cluster_check=require_strict_bilateral)
+    pool = pd.concat([dev, test], ignore_index=True)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     frames = {"pool": pool, "dev": dev, "train": train, "val": val, "test": test}
@@ -293,7 +330,9 @@ def freeze_complex_pool(
         frame.to_csv(path, sep="\t", index=False)
         paths[label] = path
     _write_manifest_meta(
-        out_dir / "complex_manifest_meta.json", seed, paths,
+        out_dir / "complex_manifest_meta.json",
+        seed,
+        paths,
         extra={"relaxations": relaxations, "strict_validation": strict_validation},
     )
     return paths
@@ -308,14 +347,20 @@ def assert_no_test_leakage(train: pd.DataFrame, val: pd.DataFrame, test: pd.Data
         if overlap:
             raise AssertionError(f"TEST LEAKAGE via {key}: {sorted(overlap)[:5]}")
     if strict_cluster_check and len(dev):
-        p_overlap = set(dev["protein_cluster_p30"].astype(str)) & set(test["protein_cluster_p30"].astype(str))
+        p_overlap = _flatten_column(dev, "protein_cluster_p30") & _flatten_column(test, "protein_cluster_p30")
         if p_overlap:
             raise AssertionError(f"P30 leakage into final test: {sorted(p_overlap)[:5]}")
-        dev_r = {_rna_holdout_key(row) for _, row in dev.iterrows()}
-        test_r = {_rna_holdout_key(row) for _, row in test.iterrows()}
-        r_overlap = dev_r & test_r
-        if r_overlap:
-            raise AssertionError(f"RNA family/R80 leakage into final test: {sorted(r_overlap)[:5]}")
+        dev_rfam = _flatten_column(dev, "rfam_family")
+        test_rfam = _flatten_column(test, "rfam_family")
+        if test_rfam:
+            r_overlap = dev_rfam & test_rfam
+            if r_overlap:
+                raise AssertionError(f"Rfam leakage into final test: {sorted(r_overlap)[:5]}")
+        # R80 is also audited even when Rfam exists, making the holdout stronger
+        # than the minimum Rfam-only requirement.
+        r80_overlap = _flatten_column(dev, "rna_cluster_r80") & _flatten_column(test, "rna_cluster_r80")
+        if r80_overlap:
+            raise AssertionError(f"R80 leakage into final test: {sorted(r80_overlap)[:5]}")
 
 
 def assert_pretraining_disjoint(protein_pool: pd.DataFrame, rna_pool: pd.DataFrame, test: pd.DataFrame) -> None:
@@ -324,20 +369,22 @@ def assert_pretraining_disjoint(protein_pool: pd.DataFrame, rna_pool: pd.DataFra
     _require_columns(rna_pool, REQUIRED_RNA, "rna_pool")
     _require_columns(test, REQUIRED_COMPLEX, "complex_test")
     p_hash = set(protein_pool["sequence_hash"].astype(str)) & set(test["protein_hash"].astype(str))
-    p_cluster = set(protein_pool["protein_cluster_p30"].astype(str)) & set(test["protein_cluster_p30"].astype(str))
+    p30 = _flatten_column(protein_pool, "protein_cluster_p30") & _flatten_column(test, "protein_cluster_p30")
     r_hash = set(rna_pool["sequence_hash"].astype(str)) & set(test["rna_hash"].astype(str))
-    r80 = set(rna_pool["rna_cluster_r80"].astype(str)) & set(test["rna_cluster_r80"].astype(str))
-    known_test_rfam = {str(x) for x in test["rfam_family"] if _known_rfam(x)}
-    rfam = set(rna_pool["rfam_family"].astype(str)) & known_test_rfam
-    if p_hash or p_cluster or r_hash or r80 or rfam:
+    r80 = _flatten_column(rna_pool, "rna_cluster_r80") & _flatten_column(test, "rna_cluster_r80")
+    rfam = _flatten_column(rna_pool, "rfam_family") & _flatten_column(test, "rfam_family")
+    if p_hash or p30 or r_hash or r80 or rfam:
         raise AssertionError(
             "FINAL TEST leaked into structural-prior pools: "
-            f"p_hash={len(p_hash)} p30={len(p_cluster)} r_hash={len(r_hash)} r80={len(r80)} rfam={len(rfam)}"
+            f"p_hash={len(p_hash)} p30={len(p30)} r_hash={len(r_hash)} r80={len(r80)} rfam={len(rfam)}"
         )
 
 
 def _write_manifest_meta(path: Path, seed: int, paths: dict[str, Path], extra: dict | None = None) -> None:
-    payload = {"seed": seed, "files": {name: {"path": str(p), "sha256": sha256_file(p)} for name, p in paths.items()}}
+    payload = {
+        "seed": seed,
+        "files": {name: {"path": str(p), "sha256": sha256_file(p)} for name, p in paths.items()},
+    }
     if extra:
         payload.update(extra)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
