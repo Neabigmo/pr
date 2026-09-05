@@ -1,4 +1,10 @@
-"""Stage orchestration and optimizer ownership for DM-ICF."""
+"""Stage orchestration and optimizer ownership for DM-ICF.
+
+Primary scientific ownership is deliberately strict:
+C -> (q, DeltaC) -> alpha -> joint coordination.
+The global C anchor remains frozen during the primary joint stage.  Scratch
+controls may explicitly request all-trainable joint optimization from step 0.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,7 +14,11 @@ import math
 import torch
 from torch import nn
 
-from pr_pilot.model.dmicf import JointPriorAndFieldModel, SimpleSparseBackboneEncoder, set_trainable_stage
+from pr_pilot.model.dmicf import (
+    JointPriorAndFieldModel,
+    SimpleSparseBackboneEncoder,
+    set_trainable_stage,
+)
 
 
 class Stage(str, Enum):
@@ -30,12 +40,48 @@ class StageContract:
 
 
 CONTRACTS = {
-    Stage.PROTEIN_PRIOR: StageContract(Stage.PROTEIN_PRIOR, "protein_train", ("protein_inverse_folding",), "protein_val_normalized_nll", ("rna_partner_sequence", "pr_edges")),
-    Stage.RNA_PRIOR: StageContract(Stage.RNA_PRIOR, "rna_train", ("rna_inverse_folding",), "rna_val_normalized_nll", ("protein_partner_sequence", "pr_edges", "native_base_identity_atoms")),
-    Stage.GLOBAL_C: StageContract(Stage.GLOBAL_C, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("predicted_structures", "test_manifest", "learned_delta_c", "learned_alpha")),
-    Stage.DELTA_C: StageContract(Stage.DELTA_C, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("test_manifest", "learned_alpha")),
-    Stage.ALPHA: StageContract(Stage.ALPHA, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("test_manifest",)),
-    Stage.JOINT: StageContract(Stage.JOINT, "complex_train", ("protein_conditional", "rna_conditional", "joint"), "complex_val_composite_normalized_nll", ("test_manifest",)),
+    Stage.PROTEIN_PRIOR: StageContract(
+        Stage.PROTEIN_PRIOR,
+        "protein_train",
+        ("protein_inverse_folding",),
+        "protein_val_normalized_nll",
+        ("rna_partner_sequence", "pr_edges"),
+    ),
+    Stage.RNA_PRIOR: StageContract(
+        Stage.RNA_PRIOR,
+        "rna_train",
+        ("rna_inverse_folding",),
+        "rna_val_normalized_nll",
+        ("protein_partner_sequence", "pr_edges", "native_base_identity_atoms"),
+    ),
+    Stage.GLOBAL_C: StageContract(
+        Stage.GLOBAL_C,
+        "complex_train",
+        ("protein_conditional_interface", "rna_conditional_interface"),
+        "complex_val_bidirectional_interface_nll",
+        ("predicted_structures", "test_manifest", "learned_delta_c", "learned_alpha"),
+    ),
+    Stage.DELTA_C: StageContract(
+        Stage.DELTA_C,
+        "complex_train",
+        ("protein_conditional_interface", "rna_conditional_interface"),
+        "complex_val_bidirectional_interface_nll",
+        ("test_manifest", "learned_alpha"),
+    ),
+    Stage.ALPHA: StageContract(
+        Stage.ALPHA,
+        "complex_train",
+        ("protein_conditional_interface", "rna_conditional_interface"),
+        "complex_val_bidirectional_interface_nll",
+        ("test_manifest",),
+    ),
+    Stage.JOINT: StageContract(
+        Stage.JOINT,
+        "complex_train",
+        ("protein_conditional", "rna_conditional", "joint"),
+        "complex_val_sequential_pseudonll",
+        ("test_manifest",),
+    ),
 }
 
 
@@ -44,22 +90,46 @@ def _set_module(module: nn.Module, value: bool) -> None:
         p.requires_grad = value
 
 
-def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> dict[str, int]:
-    """Release pretrained encoders from output-proximal layers toward inputs.
+def set_all_trainable(model: JointPriorAndFieldModel, value: bool = True) -> None:
+    """Explicit helper for scratch controls; never used by primary pretrained joint."""
+    for p in model.parameters():
+        p.requires_grad = value
 
-    Contextual heads, token-context decoders and output heads are trainable from
-    joint step 0. Encoder message/update blocks are released progressively. Raw
-    node/edge projections are released only in the last 20% of joint training.
+
+def apply_joint_unfreezing(
+    model: JointPriorAndFieldModel, progress: float
+) -> dict[str, int]:
+    """Gradually release pretrained encoders while keeping global C fixed.
+
+    The contextual interaction network, DeltaC, alpha/relevance, token-context
+    decoders, output heads and bounded lambda gains may adapt.  ``global_c`` is a
+    stage-1 anchor and remains frozen so later PMI interpretation is not silently
+    changed by joint fine-tuning.
     """
     progress = float(min(max(progress, 0.0), 1.0))
-    for module in [model.dmicf, model.protein_decoder, model.rna_decoder, model.protein_head, model.rna_head]:
+
+    # Start from a known frozen state for the DM-ICF container, then release only
+    # the contextual components.  The global C parameter stays frozen.
+    _set_module(model.dmicf, False)
+    _set_module(model.dmicf.interaction, True)
+    _set_module(model.dmicf.delta, True)
+    _set_module(model.dmicf.relevance, True)
+    model.dmicf.raw_lambda_p.requires_grad = True
+    model.dmicf.raw_lambda_r.requires_grad = True
+    model.dmicf.global_c.raw.requires_grad = False
+
+    for module in [
+        model.protein_decoder,
+        model.rna_decoder,
+        model.protein_head,
+        model.rna_head,
+    ]:
         _set_module(module, True)
 
-    released = {}
+    released: dict[str, int] = {}
     for name, enc in [("protein", model.protein_encoder), ("rna", model.rna_encoder)]:
         _set_module(enc, False)
         n = len(enc.message)
-        # start with the top block, then release one-by-one.
         n_release = min(n, max(1, int(math.ceil(progress * n))))
         for idx in range(n - n_release, n):
             _set_module(enc.message[idx], True)
@@ -74,7 +144,14 @@ def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> d
 
 def configure_stage(model: JointPriorAndFieldModel, stage: Stage) -> StageContract:
     set_trainable_stage(model, stage.value)
-    if stage == Stage.JOINT:
+    if stage == Stage.ALPHA:
+        # Primary alpha stage is intentionally identifiable: q and DeltaC are
+        # frozen after Stage Delta, and only relevance/tau learns who matters.
+        _set_module(model.dmicf.interaction, False)
+        _set_module(model.dmicf.delta, False)
+        _set_module(model.dmicf.global_c, False)
+        _set_module(model.dmicf.relevance, True)
+    elif stage == Stage.JOINT:
         apply_joint_unfreezing(model, 0.0)
     return CONTRACTS[stage]
 
@@ -83,7 +160,11 @@ def trainable_parameter_report(model: nn.Module) -> dict[str, dict[str, int]]:
     report: dict[str, dict[str, int]] = {}
     for name, param in model.named_parameters():
         parts = name.split(".")
-        family = ".".join(parts[:2]) if parts[0] == "dmicf" and len(parts) > 1 else parts[0]
+        family = (
+            ".".join(parts[:2])
+            if parts[0] == "dmicf" and len(parts) > 1
+            else parts[0]
+        )
         bucket = report.setdefault(family, {"trainable": 0, "frozen": 0})
         bucket["trainable" if param.requires_grad else "frozen"] += param.numel()
     return report
@@ -97,16 +178,30 @@ def _group(params: list[nn.Parameter], lr: float, wd: float) -> dict:
     return {"params": params, "lr": lr, "weight_decay": wd}
 
 
-def _encoder_layer_groups(enc: SimpleSparseBackboneEncoder, top_lr: float, bottom_lr: float, decay: float, wd: float) -> list[dict]:
+def _encoder_layer_groups(
+    enc: SimpleSparseBackboneEncoder,
+    top_lr: float,
+    bottom_lr: float,
+    decay: float,
+    wd: float,
+) -> list[dict]:
     """Layer-wise discriminative LR; includes frozen params for later release."""
     n = len(enc.message)
     groups: list[dict] = []
     for idx in range(n):
         depth_from_top = n - 1 - idx
-        lr = max(bottom_lr, top_lr * (decay ** depth_from_top))
-        groups.append(_group(_params(enc.message[idx], False) + _params(enc.update[idx], False), lr, wd))
+        lr = max(bottom_lr, top_lr * (decay**depth_from_top))
+        groups.append(
+            _group(
+                _params(enc.message[idx], False) + _params(enc.update[idx], False),
+                lr,
+                wd,
+            )
+        )
     groups.append(_group(_params(enc.norm, False), max(bottom_lr, top_lr * decay), wd))
-    groups.append(_group(_params(enc.node_proj, False) + _params(enc.edge_proj, False), bottom_lr, wd))
+    groups.append(
+        _group(_params(enc.node_proj, False) + _params(enc.edge_proj, False), bottom_lr, wd)
+    )
     return groups
 
 
@@ -135,7 +230,6 @@ def build_optimizer(
             _group(_params(model.rna_head), lr_heads, weight_decay),
         ]
     elif stage == Stage.GLOBAL_C:
-        # Gains are fixed at exactly one here; otherwise lambda*C is scale-degenerate.
         groups.append(_group([model.dmicf.global_c.raw], lr_heads, 0.0))
     elif stage == Stage.DELTA_C:
         groups += [
@@ -143,11 +237,7 @@ def build_optimizer(
             _group(_params(model.dmicf.delta), lr_heads, weight_decay),
         ]
     elif stage == Stage.ALPHA:
-        groups += [
-            _group(_params(model.dmicf.interaction), lr_heads, weight_decay),
-            _group(_params(model.dmicf.delta), lr_heads, weight_decay),
-            _group(_params(model.dmicf.relevance), lr_heads, weight_decay),
-        ]
+        groups.append(_group(_params(model.dmicf.relevance), lr_heads, weight_decay))
     elif stage == Stage.JOINT:
         groups += [
             _group(_params(model.dmicf.interaction, False), lr_heads, weight_decay),
@@ -157,10 +247,28 @@ def build_optimizer(
             _group(_params(model.rna_decoder, False), lr_projections, weight_decay),
             _group(_params(model.protein_head, False), lr_projections, weight_decay),
             _group(_params(model.rna_head, False), lr_projections, weight_decay),
-            *_encoder_layer_groups(model.protein_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
-            *_encoder_layer_groups(model.rna_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
+            *_encoder_layer_groups(
+                model.protein_encoder,
+                lr_encoder_top,
+                lr_encoder_bottom,
+                layerwise_lr_decay,
+                weight_decay,
+            ),
+            *_encoder_layer_groups(
+                model.rna_encoder,
+                lr_encoder_top,
+                lr_encoder_bottom,
+                layerwise_lr_decay,
+                weight_decay,
+            ),
+            # Included for scratch controls. In primary joint training this
+            # parameter remains requires_grad=False and therefore cannot drift.
             _group([model.dmicf.global_c.raw], lr_global_c_joint, 0.0),
-            _group([model.dmicf.raw_lambda_p, model.dmicf.raw_lambda_r], lr_projections, 0.0),
+            _group(
+                [model.dmicf.raw_lambda_p, model.dmicf.raw_lambda_r],
+                lr_projections,
+                0.0,
+            ),
         ]
     else:
         raise ValueError(stage)
@@ -171,7 +279,9 @@ def build_optimizer(
 
 
 class TaskRatioSchedule:
-    def __init__(self, start=(2, 2, 1), end=(1, 1, 1), transition_fraction: float = 0.7):
+    def __init__(
+        self, start=(2, 2, 1), end=(1, 1, 1), transition_fraction: float = 0.7
+    ):
         self.start, self.end = start, end
         self.transition_fraction = transition_fraction
         self.names = ("protein_conditional", "rna_conditional", "joint")
@@ -189,4 +299,6 @@ def assert_stage_batch(contract: StageContract, batch_meta: dict) -> None:
         raise AssertionError(f"Task {task!r} is illegal for {contract.stage.value}")
     for forbidden in contract.forbidden_inputs:
         if batch_meta.get(forbidden, False):
-            raise AssertionError(f"Forbidden input {forbidden!r} present in {contract.stage.value}")
+            raise AssertionError(
+                f"Forbidden input {forbidden!r} present in {contract.stage.value}"
+            )
