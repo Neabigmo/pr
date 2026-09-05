@@ -1,10 +1,12 @@
 """Executable trainer for the six-stage 1k/1k/1k pilot.
 
-The pilot remains sample-wise for maximal auditability, but every primary switch
-in ``configs/pilot.yaml`` is executable here: coordinate noise, intra/PR edge
-dropout, masking curriculum/full-mask examples, partner-token dropout, staged
-DeltaC/alpha activation, gradual unfreezing, discriminative learning rates,
-BF16 autocast, warmup/cosine decay and group-balanced losses.
+Primary switches are executable here: coordinate noise, intra/PR edge dropout,
+mask curriculum/full-mask examples, partner-token dropout, staged C/DeltaC/alpha
+activation, gradual unfreezing, discriminative learning rates, BF16 autocast,
+warmup/cosine decay and group-balanced losses.
+
+Joint checkpoint selection uses deterministic teacher-forced sequential pseudo-NLL,
+not a simultaneous full-mask forward in which all partner contributions vanish.
 """
 from __future__ import annotations
 
@@ -18,19 +20,30 @@ import random
 import numpy as np
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 
 from pr_pilot.model.dmicf import JointPriorAndFieldModel, PRBatch
 from pr_pilot.runtime.dataset_adapter import ComplexTensorSample, PolymerGraph
 from pr_pilot.runtime.gemmi_adapter import GemmiStructureAdapter, feature_dimensions
-from pr_pilot.runtime.manifest_dataset import ManifestTable, load_complex_row, load_protein_row, load_rna_row
+from pr_pilot.runtime.manifest_dataset import (
+    ManifestTable,
+    load_complex_row,
+    load_protein_row,
+    load_rna_row,
+)
 from pr_pilot.training.corruption import generate_corruption, hide_known_partner_tokens
-from pr_pilot.training.losses import alpha_entropy_regularizer, balanced_sequence_loss, global_c_regularizer
+from pr_pilot.training.losses import (
+    alpha_entropy_regularizer,
+    balanced_sequence_loss,
+    global_c_regularizer,
+)
 from pr_pilot.training.stages import (
     Stage,
     TaskRatioSchedule,
     apply_joint_unfreezing,
     build_optimizer,
     configure_stage,
+    set_all_trainable,
     trainable_parameter_report,
 )
 
@@ -83,7 +96,9 @@ def _move_graph(graph: PolymerGraph, device: torch.device) -> PolymerGraph:
     return graph
 
 
-def _move_complex(sample: ComplexTensorSample, device: torch.device) -> ComplexTensorSample:
+def _move_complex(
+    sample: ComplexTensorSample, device: torch.device
+) -> ComplexTensorSample:
     _move_graph(sample.protein, device)
     _move_graph(sample.rna, device)
     sample.pr = PRBatch(
@@ -114,11 +129,9 @@ def _drop_intra_edges(graph: PolymerGraph, probability: float, seed: int) -> Non
         raise ValueError("intra edge-drop probability must be in [0,1)")
     e = graph.edge_index.shape[1]
     rng = np.random.default_rng(seed)
-    # Last intra-edge feature is the covalent-neighbour indicator by contract.
     covalent = graph.edge_x[:, -1].detach().cpu().numpy() > 0.5
     keep = covalent | (rng.random(e) >= p)
     src = graph.edge_index[0].detach().cpu().numpy()
-    # Preserve at least one outgoing edge per node that originally had edges.
     for node in np.unique(src):
         idx = np.flatnonzero(src == node)
         if len(idx) and not keep[idx].any():
@@ -129,8 +142,14 @@ def _drop_intra_edges(graph: PolymerGraph, probability: float, seed: int) -> Non
     graph.validate()
 
 
-def _drop_pr_edges(sample: ComplexTensorSample, probability: float, seed: int) -> None:
-    """Drop PR edges but retain each target node's nearest available neighbour."""
+def _drop_pr_edges(
+    sample: ComplexTensorSample, probability: float, seed: int
+) -> None:
+    """Drop PR message edges but retain each represented node's nearest edge.
+
+    Canonical interface labels are stored on PolymerGraph independently and are
+    therefore not changed by this augmentation.
+    """
     p = float(probability)
     e = int(sample.pr.protein_index.numel())
     if p <= 0 or e == 0:
@@ -159,17 +178,34 @@ def _drop_pr_edges(sample: ComplexTensorSample, probability: float, seed: int) -
     sample.validate()
 
 
-def _augment_graphs(sample, cfg: dict, stage: Stage, sample_id: str, epoch: int) -> None:
-    """Apply configured training-time graph corruption deterministically."""
+def _augment_graphs(
+    sample, cfg: dict, stage: Stage, sample_id: str, epoch: int
+) -> None:
     gcfg = cfg["geometry"]
     seed = int(cfg["experiment"]["pilot_seed"])
     if isinstance(sample, PolymerGraph):
-        _drop_intra_edges(sample, float(gcfg.get("edge_dropout", 0.0)), _stable_seed(seed, sample_id, epoch, "intra"))
+        _drop_intra_edges(
+            sample,
+            float(gcfg.get("edge_dropout", 0.0)),
+            _stable_seed(seed, sample_id, epoch, "intra"),
+        )
         return
-    _drop_intra_edges(sample.protein, float(gcfg.get("edge_dropout", 0.0)), _stable_seed(seed, sample_id, epoch, "p-intra"))
-    _drop_intra_edges(sample.rna, float(gcfg.get("edge_dropout", 0.0)), _stable_seed(seed, sample_id, epoch, "r-intra"))
+    _drop_intra_edges(
+        sample.protein,
+        float(gcfg.get("edge_dropout", 0.0)),
+        _stable_seed(seed, sample_id, epoch, "p-intra"),
+    )
+    _drop_intra_edges(
+        sample.rna,
+        float(gcfg.get("edge_dropout", 0.0)),
+        _stable_seed(seed, sample_id, epoch, "r-intra"),
+    )
     if stage in {Stage.DELTA_C, Stage.ALPHA, Stage.JOINT}:
-        _drop_pr_edges(sample, float(gcfg.get("pr_edge_dropout", 0.0)), _stable_seed(seed, sample_id, epoch, "pr"))
+        _drop_pr_edges(
+            sample,
+            float(gcfg.get("pr_edge_dropout", 0.0)),
+            _stable_seed(seed, sample_id, epoch, "pr"),
+        )
 
 
 def _stage_flags(stage: Stage) -> tuple[bool, bool]:
@@ -180,10 +216,12 @@ def _stage_flags(stage: Stage) -> tuple[bool, bool]:
     return True, True
 
 
-def _all_interface_corruption(graph: PolymerGraph) -> tuple[Tensor, Tensor, Tensor]:
+def _all_interface_corruption(
+    graph: PolymerGraph,
+) -> tuple[Tensor, Tensor, Tensor]:
     target = graph.interface & graph.valid & ~graph.fixed
     if not target.any():
-        raise ValueError("Complex contains no designable interface position")
+        raise ValueError("Complex contains no designable canonical interface position")
     tokens = graph.sequence.clone()
     known = graph.valid.clone().bool()
     known[target] = False
@@ -218,9 +256,22 @@ def _complex_forward(
     )
 
 
-def _corrupt(graph: PolymerGraph, alphabet: int, row, epoch: int, seed: int, cfg: dict, progress: float, joint: bool = False):
+def _corrupt(
+    graph: PolymerGraph,
+    alphabet: int,
+    row,
+    epoch: int,
+    seed: int,
+    cfg: dict,
+    progress: float,
+    joint: bool = False,
+):
     mcfg = cfg["masking"]
-    min_fraction = max(0.20, float(mcfg["min_fraction"])) if joint else float(mcfg["min_fraction"])
+    min_fraction = (
+        max(0.20, float(mcfg["min_fraction"]))
+        if joint
+        else float(mcfg["min_fraction"])
+    )
     return generate_corruption(
         graph,
         alphabet,
@@ -248,22 +299,22 @@ def _maybe_hard_mask(
     polymer: str,
     fraction: float,
 ) -> Tensor:
-    """Restrict a target mask to positions where the structural prior most disagrees with native.
-
-    Score = max predicted probability - native probability. The native token is
-    never exposed to the model; it is used only for supervised hard-example
-    selection. At least one interface target is retained.
-    """
     if fraction <= 0 or mask.sum() <= 1:
         return mask
     with torch.no_grad():
         if polymer == "protein":
-            logits, _ = model.protein_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, tokens, known)
+            logits, _ = model.protein_prior_logits(
+                graph.node_x, graph.edge_index, graph.edge_x, tokens, known
+            )
         else:
-            logits, _ = model.rna_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, tokens, known)
+            logits, _ = model.rna_prior_logits(
+                graph.node_x, graph.edge_index, graph.edge_x, tokens, known
+            )
         prob = torch.softmax(logits.float(), dim=-1)
         native = graph.sequence
-        score = prob.max(dim=-1).values - prob.gather(-1, native[:, None]).squeeze(-1)
+        score = prob.max(dim=-1).values - prob.gather(
+            -1, native[:, None]
+        ).squeeze(-1)
         idx = torch.where(mask)[0]
         n = max(1, int(round(len(idx) * min(max(fraction, 0.05), 1.0))))
         chosen = idx[torch.topk(score[idx], k=n, largest=True).indices]
@@ -309,7 +360,11 @@ def _one_training_loss(
             float(lcfg["protein_label_smoothing"]),
             0.0,
         )
-        return breakdown.total, {**breakdown.detached_scalars(), "mask_fraction": corruption.sampled_fraction, "mask_mode": corruption.mode}
+        return breakdown.total, {
+            **breakdown.detached_scalars(),
+            "mask_fraction": corruption.sampled_fraction,
+            "mask_mode": corruption.mode,
+        }
 
     if stage == Stage.RNA_PRIOR:
         graph = _move_graph(load_rna_row(adapter, row), device)
@@ -335,13 +390,19 @@ def _one_training_loss(
             0.0,
             float(lcfg["rna_label_smoothing"]),
         )
-        return breakdown.total, {**breakdown.detached_scalars(), "mask_fraction": corruption.sampled_fraction, "mask_mode": corruption.mode}
+        return breakdown.total, {
+            **breakdown.detached_scalars(),
+            "mask_fraction": corruption.sampled_fraction,
+            "mask_mode": corruption.mode,
+        }
 
     sample = _move_complex(load_complex_row(adapter, row), device)
     _augment_graphs(sample, cfg, stage, row.sample_id, epoch)
 
     if stage in {Stage.GLOBAL_C, Stage.DELTA_C, Stage.ALPHA}:
-        protein_target = _stable_uniform(seed, row.sample_id, epoch, stage.value) < 0.5
+        protein_target = (
+            _stable_uniform(seed, row.sample_id, epoch, stage.value) < 0.5
+        )
         if protein_target:
             ptok, pknown, pmask = _all_interface_corruption(sample.protein)
             rtok = sample.rna.sequence.clone()
@@ -359,8 +420,6 @@ def _one_training_loss(
             target_graph = sample.rna
             target_tokens, target_known, target_mask = rtok, rknown, rmask
 
-        # Alpha-stage partner-token dropout is the explicit bridge from fully
-        # conditional supervision toward partially-known joint contexts.
         if stage == Stage.ALPHA:
             if task == "protein":
                 rknown = hide_known_partner_tokens(
@@ -381,8 +440,16 @@ def _one_training_loss(
                     float(mcfg["partner_token_dropout"]),
                 )
 
-        hard_fraction = float(cfg["training_stages"][stage.value].get("hard_context_fraction_late", 0.0))
-        use_hard = progress >= 0.50 and hard_fraction > 0 and _stable_uniform(seed, row.sample_id, epoch, "hard") < hard_fraction
+        hard_fraction = float(
+            cfg["training_stages"][stage.value].get(
+                "hard_context_fraction_late", 0.0
+            )
+        )
+        use_hard = (
+            progress >= 0.50
+            and hard_fraction > 0
+            and _stable_uniform(seed, row.sample_id, epoch, "hard") < hard_fraction
+        )
         if use_hard:
             hard_mask = _maybe_hard_mask(
                 model,
@@ -398,9 +465,15 @@ def _one_training_loss(
             else:
                 rmask = hard_mask
 
-        out = _complex_forward(model, sample, ptok, rtok, pknown, rknown, stage)
-        smooth_p = 0.0 if stage == Stage.GLOBAL_C else float(lcfg["protein_label_smoothing"])
-        smooth_r = 0.0 if stage == Stage.GLOBAL_C else float(lcfg["rna_label_smoothing"])
+        out = _complex_forward(
+            model, sample, ptok, rtok, pknown, rknown, stage
+        )
+        smooth_p = (
+            0.0 if stage == Stage.GLOBAL_C else float(lcfg["protein_label_smoothing"])
+        )
+        smooth_r = (
+            0.0 if stage == Stage.GLOBAL_C else float(lcfg["rna_label_smoothing"])
+        )
         breakdown = balanced_sequence_loss(
             out["protein_logits"] if task == "protein" else None,
             sample.protein.sequence if task == "protein" else None,
@@ -416,14 +489,34 @@ def _one_training_loss(
         )
         loss = breakdown.total
         if stage == Stage.GLOBAL_C and bool(lcfg.get("c_l2_enabled", False)):
-            penalty, _ = global_c_regularizer(out["C"], breakdown.total, float(lcfg["c_l2_target_fraction"]))
+            penalty, _ = global_c_regularizer(
+                out["C"],
+                breakdown.total,
+                float(lcfg["c_l2_target_fraction"]),
+            )
             loss = loss + penalty
-        if stage == Stage.ALPHA and progress < float(lcfg.get("alpha_entropy_warmup_fraction", 0.10)):
+        if stage == Stage.ALPHA and progress < float(
+            lcfg.get("alpha_entropy_warmup_fraction", 0.10)
+        ):
             alpha = out["alpha_p"] if task == "protein" else out["alpha_r"]
-            groups = sample.pr.protein_index if task == "protein" else sample.pr.rna_index
-            n_groups = sample.protein.node_x.shape[0] if task == "protein" else sample.rna.node_x.shape[0]
-            loss = loss + float(lcfg["alpha_entropy_warmup_weight"]) * alpha_entropy_regularizer(alpha, groups, n_groups)
-        return loss, {**breakdown.detached_scalars(), "task": task, "hard_context": bool(use_hard)}
+            groups = (
+                sample.pr.protein_index
+                if task == "protein"
+                else sample.pr.rna_index
+            )
+            n_groups = (
+                sample.protein.node_x.shape[0]
+                if task == "protein"
+                else sample.rna.node_x.shape[0]
+            )
+            loss = loss + float(
+                lcfg["alpha_entropy_warmup_weight"]
+            ) * alpha_entropy_regularizer(alpha, groups, n_groups)
+        return loss, {
+            **breakdown.detached_scalars(),
+            "task": task,
+            "hard_context": bool(use_hard),
+        }
 
     schedule = TaskRatioSchedule(
         tuple(cfg["training_stages"]["joint"]["task_ratio_start"]),
@@ -467,13 +560,19 @@ def _one_training_loss(
         pmask = torch.zeros_like(sample.protein.valid)
         loss_task = "rna"
     else:
-        pc = _corrupt(sample.protein, 20, row, epoch, seed, cfg, progress, joint=True)
-        rc = _corrupt(sample.rna, 4, row, epoch, seed + 17, cfg, progress, joint=True)
+        pc = _corrupt(
+            sample.protein, 20, row, epoch, seed, cfg, progress, joint=True
+        )
+        rc = _corrupt(
+            sample.rna, 4, row, epoch, seed + 17, cfg, progress, joint=True
+        )
         ptok, pknown, pmask = pc.input_tokens, pc.known, pc.target_mask
         rtok, rknown, rmask = rc.input_tokens, rc.known, rc.target_mask
         loss_task = "joint"
 
-    out = _complex_forward(model, sample, ptok, rtok, pknown, rknown, Stage.JOINT)
+    out = _complex_forward(
+        model, sample, ptok, rtok, pknown, rknown, Stage.JOINT
+    )
     breakdown = balanced_sequence_loss(
         out["protein_logits"] if loss_task in {"protein", "joint"} else None,
         sample.protein.sequence if loss_task in {"protein", "joint"} else None,
@@ -492,8 +591,88 @@ def _one_training_loss(
 
 def _autocast(cfg: dict, device: torch.device):
     precision = str(cfg["optimization"].get("precision", "fp32")).lower()
-    enabled = device.type == "cuda" and precision == "bf16" and torch.cuda.is_bf16_supported()
-    return torch.autocast(device_type="cuda", dtype=torch.bfloat16) if enabled else nullcontext()
+    enabled = (
+        device.type == "cuda"
+        and precision == "bf16"
+        and torch.cuda.is_bf16_supported()
+    )
+    return (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if enabled
+        else nullcontext()
+    )
+
+
+def _joint_order(
+    sample: ComplexTensorSample, order_index: int, seed: int
+) -> list[tuple[str, int]]:
+    proteins = [
+        ("protein", int(i))
+        for i in torch.where(sample.protein.valid & ~sample.protein.fixed)[0]
+    ]
+    rnas = [
+        ("rna", int(i))
+        for i in torch.where(sample.rna.valid & ~sample.rna.fixed)[0]
+    ]
+    if order_index == 1:
+        return proteins + rnas
+    if order_index == 2:
+        return rnas + proteins
+    order = proteins + rnas
+    rng = random.Random(seed + 104729 * order_index)
+    rng.shuffle(order)
+    return order
+
+
+@torch.no_grad()
+def sequential_joint_pseudonll(
+    model: JointPriorAndFieldModel,
+    sample: ComplexTensorSample,
+    orders: int,
+    seed: int,
+) -> float:
+    """Teacher-forced mixed-order pseudo-NLL aligned with joint inference.
+
+    Fixed positions are known from step 0.  At each step the current and future
+    design positions remain unknown, the native current token is scored, then it
+    is revealed for subsequent steps.  Scores are normalized by log alphabet and
+    averaged over P-interface/P-noninterface/R-interface/R-noninterface groups so
+    chain length or alphabet size cannot dominate the checkpoint metric.
+    """
+    if orders <= 0:
+        raise ValueError("joint validation orders must be positive")
+    order_scores: list[float] = []
+    for order_index in range(orders):
+        pknown = sample.protein.fixed & sample.protein.valid
+        rknown = sample.rna.fixed & sample.rna.valid
+        groups: dict[str, list[float]] = {"PI": [], "PN": [], "RI": [], "RN": []}
+        for polymer, i in _joint_order(sample, order_index, seed):
+            out = _complex_forward(
+                model,
+                sample,
+                sample.protein.sequence,
+                sample.rna.sequence,
+                pknown,
+                rknown,
+                Stage.JOINT,
+            )
+            if polymer == "protein":
+                logits = out["protein_logits"][i]
+                native = int(sample.protein.sequence[i])
+                value = float(-F.log_softmax(logits.float(), -1)[native].cpu()) / math.log(20)
+                groups["PI" if bool(sample.protein.interface[i]) else "PN"].append(value)
+                pknown[i] = True
+            else:
+                logits = out["rna_logits"][i]
+                native = int(sample.rna.sequence[i])
+                value = float(-F.log_softmax(logits.float(), -1)[native].cpu()) / math.log(4)
+                groups["RI" if bool(sample.rna.interface[i]) else "RN"].append(value)
+                rknown[i] = True
+        means = [float(np.mean(v)) for v in groups.values() if v]
+        if not means:
+            raise ValueError("Joint validation complex has no designable positions")
+        order_scores.append(float(np.mean(means)))
+    return float(np.mean(order_scores))
 
 
 @torch.no_grad()
@@ -504,16 +683,43 @@ def validate_stage(
     cfg: dict,
     device: torch.device,
 ) -> float:
-    """Pre-registered normalized-NLL validation with no stochastic augmentation."""
+    """Pre-registered validation metric with no stochastic augmentation."""
     model.eval()
     adapter = _adapter(cfg, 0, training=False)
-    values = []
-    for row in manifest.rows():
+    values: list[float] = []
+    rows = list(manifest.rows())
+
+    if stage == Stage.JOINT:
+        max_complexes = int(
+            cfg.get("evaluation", {}).get("joint_validation_max_complexes", len(rows))
+        )
+        orders = int(cfg.get("evaluation", {}).get("joint_validation_orders", 3))
+        seed = int(cfg["experiment"]["pilot_seed"])
+        rows = sorted(
+            rows,
+            key=lambda row: _stable_seed(seed, row.sample_id, "joint-validation-subset"),
+        )[:max_complexes]
+        for row in rows:
+            sample = _move_complex(load_complex_row(adapter, row), device)
+            values.append(
+                sequential_joint_pseudonll(model, sample, orders, seed)
+            )
+        if not values:
+            raise ValueError("Empty joint validation manifest")
+        return float(np.mean(values))
+
+    for row in rows:
         with _autocast(cfg, device):
             if stage == Stage.PROTEIN_PRIOR:
                 graph = _move_graph(load_protein_row(adapter, row), device)
                 known = graph.fixed & graph.valid
-                logits, _ = model.protein_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, graph.sequence, known)
+                logits, _ = model.protein_prior_logits(
+                    graph.node_x,
+                    graph.edge_index,
+                    graph.edge_x,
+                    graph.sequence,
+                    known,
+                )
                 breakdown = balanced_sequence_loss(
                     logits,
                     graph.sequence,
@@ -532,7 +738,13 @@ def validate_stage(
             if stage == Stage.RNA_PRIOR:
                 graph = _move_graph(load_rna_row(adapter, row), device)
                 known = graph.fixed & graph.valid
-                logits, _ = model.rna_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, graph.sequence, known)
+                logits, _ = model.rna_prior_logits(
+                    graph.node_x,
+                    graph.edge_index,
+                    graph.edge_x,
+                    graph.sequence,
+                    known,
+                )
                 breakdown = balanced_sequence_loss(
                     None,
                     None,
@@ -609,38 +821,7 @@ def validate_stage(
                 0.0,
                 0.0,
             )
-            if stage == Stage.JOINT:
-                pnone = sample.protein.fixed & sample.protein.valid
-                rnone = sample.rna.fixed & sample.rna.valid
-                outj = model(
-                    sample.protein.node_x,
-                    sample.protein.edge_index,
-                    sample.protein.edge_x,
-                    sample.rna.node_x,
-                    sample.rna.edge_index,
-                    sample.rna.edge_x,
-                    sample.pr,
-                    sample.protein.sequence,
-                    sample.rna.sequence,
-                    pnone,
-                    rnone,
-                )
-                bj = balanced_sequence_loss(
-                    outj["protein_logits"],
-                    sample.protein.sequence,
-                    sample.protein.valid & ~sample.protein.fixed,
-                    sample.protein.interface,
-                    outj["rna_logits"],
-                    sample.rna.sequence,
-                    sample.rna.valid & ~sample.rna.fixed,
-                    sample.rna.interface,
-                    "joint",
-                    0.0,
-                    0.0,
-                )
-                values.append((float(bp.total) + float(br.total) + float(bj.total)) / 3.0)
-            else:
-                values.append((float(bp.total) + float(br.total)) / 2.0)
+            values.append((float(bp.total) + float(br.total)) / 2.0)
     if not values:
         raise ValueError("Empty validation manifest")
     return float(np.mean(values))
@@ -686,6 +867,14 @@ def train_stage(
         model.load_state_dict(payload["model"])
     configure_stage(model, stage)
 
+    joint_gradual = bool(
+        cfg["training_stages"].get("joint", {}).get("gradual_unfreezing", True)
+    )
+    if stage == Stage.JOINT and not joint_gradual:
+        # Used by the scratch control only. Randomly initialized encoders must not
+        # be handicapped by a pretrained-specific freezing schedule.
+        set_all_trainable(model, True)
+
     optcfg = cfg["optimization"]
     optimizer = build_optimizer(
         model,
@@ -703,8 +892,7 @@ def train_stage(
     val_table = ManifestTable(val_manifest)
     max_epochs = int(
         cfg["training_stages"][stage.value].get(
-            "max_epochs",
-            cfg["optimization"].get("max_epochs_default", 100),
+            "max_epochs", cfg["optimization"].get("max_epochs_default", 100)
         )
     )
     patience = int(optcfg["early_stopping_patience"])
@@ -719,7 +907,7 @@ def train_stage(
     for epoch in range(max_epochs):
         model.train()
         progress = epoch / max(1, max_epochs - 1)
-        if stage == Stage.JOINT:
+        if stage == Stage.JOINT and joint_gradual:
             apply_joint_unfreezing(model, progress)
         adapter = _adapter(cfg, epoch, training=True)
         rows = list(train_table.rows())
@@ -733,12 +921,20 @@ def train_stage(
         for row in rows:
             optimizer.zero_grad(set_to_none=True)
             with _autocast(cfg, dev):
-                loss, detail = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev)
+                loss, detail = _one_training_loss(
+                    model, row, adapter, stage, cfg, epoch, progress, dev
+                )
             if not torch.isfinite(loss):
-                raise FloatingPointError(f"Non-finite loss at {stage.value} epoch={epoch} sample={row.sample_id}")
+                raise FloatingPointError(
+                    f"Non-finite loss at {stage.value} epoch={epoch} sample={row.sample_id}"
+                )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
-                [p for p in model.parameters() if p.requires_grad and p.grad is not None],
+                [
+                    p
+                    for p in model.parameters()
+                    if p.requires_grad and p.grad is not None
+                ],
                 float(optcfg["grad_clip_norm"]),
             )
             optimizer.step()
@@ -756,19 +952,31 @@ def train_stage(
             if detail.get("hard_context"):
                 hard_count += 1
             if "task" in detail:
-                task_counts[str(detail["task"])] = task_counts.get(str(detail["task"]), 0) + 1
+                task_counts[str(detail["task"])] = task_counts.get(
+                    str(detail["task"]), 0
+                ) + 1
 
         val = validate_stage(model, stage, val_table, cfg, dev)
         record = {
             "stage": stage.value,
             "epoch": epoch,
+            "schedule_horizon_epochs": max_epochs,
+            "schedule_progress": progress,
             "train_loss": float(np.mean(running)),
             "val_metric": val,
-            "mean_mask_fraction": float(np.mean(mask_fractions)) if mask_fractions else None,
+            "mean_mask_fraction": (
+                float(np.mean(mask_fractions)) if mask_fractions else None
+            ),
             "hard_context_samples": hard_count,
             "task_counts": task_counts,
             "trainable": trainable_parameter_report(model),
-            "precision": "bf16" if dev.type == "cuda" and str(optcfg.get("precision", "")).lower() == "bf16" and torch.cuda.is_bf16_supported() else "fp32",
+            "precision": (
+                "bf16"
+                if dev.type == "cuda"
+                and str(optcfg.get("precision", "")).lower() == "bf16"
+                and torch.cuda.is_bf16_supported()
+                else "fp32"
+            ),
         }
         with metrics_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, sort_keys=True) + "\n")
@@ -781,6 +989,8 @@ def train_stage(
                     "model": model.state_dict(),
                     "stage": stage.value,
                     "epoch": epoch,
+                    "schedule_horizon_epochs": max_epochs,
+                    "schedule_progress": progress,
                     "val_metric": val,
                     "config": cfg,
                 },
