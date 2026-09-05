@@ -18,7 +18,8 @@ def test_resolution_method_filter_can_be_disabled_for_a_round(monkeypatch, tmp_p
         modified_fraction=0.0,
     )
     monkeypatch.setattr(screening, "_metadata_header", lambda path: ("title", "X-RAY DIFFRACTION", 8.0, object()))
-    monkeypatch.setattr(screening.gemmi, "make_structure_from_block", lambda block: object())
+    parsed_paths = []
+    monkeypatch.setattr(screening.gemmi, "read_structure", lambda path: parsed_paths.append(path) or object())
     monkeypatch.setattr(
         screening,
         "_chains",
@@ -50,6 +51,7 @@ def test_resolution_method_filter_can_be_disabled_for_a_round(monkeypatch, tmp_p
     assert accepted is not None
     assert reason == ""
     assert accepted["resolution"] == 8.0
+    assert parsed_paths == [str(path)]
 
 
 def test_spatial_index_matches_bruteforce_interface_pairs():

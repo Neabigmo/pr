@@ -295,7 +295,10 @@ def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: Scr
     ):
         return None, "excluded_large_RNP_keyword"
     try:
-        structure = gemmi.make_structure_from_block(block)
+        # Use the same file parser as the runtime adapter.  Gemmi's block
+        # materializer can omit unsupported polymer residues, which would let
+        # screening accept a chain that later fails during training.
+        structure = gemmi.read_structure(str(path))
     except Exception as exc:
         return None, f"parse_error:{type(exc).__name__}"
     proteins, rnas, has_dna, has_unsupported = _chains(structure)

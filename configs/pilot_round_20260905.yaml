@@ -14,9 +14,9 @@ sampling:
   rna_pool_size: 1000
   rna_train: 900
   rna_val: 100
-  complex_pool_size: 1095
+  complex_pool_size: 1086
   complex_dev: 1000
-  complex_test: 95
+  complex_test: 86
   complex_train: 900
   complex_val: 100
   final_refit_on_full_dev: true
