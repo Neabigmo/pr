@@ -1,19 +1,8 @@
 """Coordinate-level screening for the mini-pilot.
 
-This module turns downloaded RCSB mmCIF files into auditable eligible tables.
-Every rejection has an explicit reason. We intentionally screen locally rather
-than assuming an RCSB metadata query proves that a usable interface exists.
-
-Pilot policy:
-- protein-only and RNA-only pools use one representative clean polymer chain per
-  PDB entry so "1000 structures" means 1000 distinct PDB entries;
-- complex samples use biological assembly 1 and retain all protein/RNA chains
-  that participate in the Protein-RNA contact graph;
-- DNA/NA-hybrid candidates are already excluded at discovery and any remaining
-  canonical DNA residues trigger rejection;
-- ribosome/spliceosome filtering is applied to complex samples;
-- interface existence and interface backbone completeness are checked from
-  coordinates, not titles alone.
+Every rejection is explicit and auditable. Screening and training share the same
+canonical residue vocabulary, so a structure cannot pass QC with one sequence
+and later be silently shortened by the tensor adapter.
 """
 from __future__ import annotations
 
@@ -28,19 +17,17 @@ import gemmi
 import numpy as np
 import pandas as pd
 
+from pr_pilot.data.residue_vocab import classify_residue
 
-AA3_TO_1 = {
-    "ALA":"A", "ARG":"R", "ASN":"N", "ASP":"D", "CYS":"C",
-    "GLN":"Q", "GLU":"E", "GLY":"G", "HIS":"H", "ILE":"I",
-    "LEU":"L", "LYS":"K", "MET":"M", "PHE":"F", "PRO":"P",
-    "SER":"S", "THR":"T", "TRP":"W", "TYR":"Y", "VAL":"V",
-}
-RNA_TO_1 = {"A":"A", "C":"C", "G":"G", "U":"U"}
-DNA_NAMES = {"DA", "DC", "DG", "DT", "DU"}
+
 PROTEIN_CORE = {"N", "CA", "C", "O"}
 RNA_SUGAR_CORE = {"C1'", "C2'", "C3'", "C4'", "O4'"}
 EXCLUDE_COMPLEX_KEYWORDS = (
-    "ribosome", "ribosomal", "spliceosome", "spliceosomal", "pre-spliceosome",
+    "ribosome",
+    "ribosomal",
+    "spliceosome",
+    "spliceosomal",
+    "pre-spliceosome",
 )
 
 
@@ -65,6 +52,7 @@ class ResidueRecord:
     index: int
     name: str
     token: str
+    modified: bool
     atoms: set[str]
     heavy_xyz: np.ndarray
 
@@ -78,6 +66,10 @@ class ChainRecord:
     @property
     def sequence(self) -> str:
         return "".join(r.token for r in self.residues)
+
+    @property
+    def modified_fraction(self) -> float:
+        return sum(r.modified for r in self.residues) / max(1, len(self.residues))
 
 
 def sha256_text(text: str) -> str:
@@ -95,11 +87,13 @@ def _block_value(block: gemmi.cif.Block, tag: str) -> str:
 def _metadata(path: Path) -> tuple[str, str, float | None, gemmi.Structure]:
     doc = gemmi.cif.read_file(str(path))
     block = doc.sole_block()
-    title = " ".join([
-        _block_value(block, "_struct.title"),
-        _block_value(block, "_struct_keywords.pdbx_keywords"),
-        _block_value(block, "_struct_keywords.text"),
-    ]).strip()
+    title = " ".join(
+        [
+            _block_value(block, "_struct.title"),
+            _block_value(block, "_struct_keywords.pdbx_keywords"),
+            _block_value(block, "_struct_keywords.text"),
+        ]
+    ).strip()
     method_values = [str(x).strip() for x in block.find_values("_exptl.method")]
     method = ";".join(x for x in method_values if x and x not in {"?", "."})
     resolution = None
@@ -121,47 +115,63 @@ def _metadata(path: Path) -> tuple[str, str, float | None, gemmi.Structure]:
 
 def _heavy_xyz(residue: gemmi.Residue) -> tuple[set[str], np.ndarray]:
     names: set[str] = set()
-    coords = []
+    chosen: dict[str, tuple[float, np.ndarray]] = {}
     for atom in residue:
         name = atom.name.strip()
+        xyz = np.array([atom.pos.x, atom.pos.y, atom.pos.z], dtype=np.float32)
+        if not np.isfinite(xyz).all():
+            continue
+        occ = float(atom.occ)
         names.add(name)
-        if atom.element.name != "H":
-            coords.append([atom.pos.x, atom.pos.y, atom.pos.z])
-    arr = np.asarray(coords, dtype=np.float32)
+        if atom.element.name != "H" and (name not in chosen or occ > chosen[name][0]):
+            chosen[name] = (occ, xyz)
+    arr = np.asarray([v[1] for v in chosen.values()], dtype=np.float32)
     if arr.size == 0:
         arr = np.zeros((0, 3), dtype=np.float32)
     return names, arr
 
 
-def _chains(structure: gemmi.Structure) -> tuple[list[ChainRecord], list[ChainRecord], bool]:
+def _chains(structure: gemmi.Structure) -> tuple[list[ChainRecord], list[ChainRecord], bool, bool]:
     if len(structure) == 0:
-        return [], [], False
+        return [], [], False, False
     model = structure[0]
     proteins: list[ChainRecord] = []
     rnas: list[ChainRecord] = []
     has_dna = False
+    has_unsupported_polymer = False
     for chain in model:
         protein_res: list[ResidueRecord] = []
         rna_res: list[ResidueRecord] = []
+        chain_has_unsupported = False
         for idx, residue in enumerate(chain):
             name = residue.name.strip().upper()
-            if name in DNA_NAMES:
+            cls = classify_residue(name)
+            if cls.polymer == "dna":
                 has_dna = True
                 continue
-            if name in AA3_TO_1:
-                atoms, xyz = _heavy_xyz(residue)
-                protein_res.append(ResidueRecord(chain.name, idx, name, AA3_TO_1[name], atoms, xyz))
-            elif name in RNA_TO_1:
-                atoms, xyz = _heavy_xyz(residue)
-                rna_res.append(ResidueRecord(chain.name, idx, name, RNA_TO_1[name], atoms, xyz))
-        # Mixed protein/RNA in one chain is considered malformed for this pilot.
+            if cls.polymer == "unsupported_polymer":
+                chain_has_unsupported = True
+                continue
+            if cls.polymer not in {"protein", "rna"} or cls.token is None:
+                continue
+            atoms, xyz = _heavy_xyz(residue)
+            rec = ResidueRecord(chain.name, idx, name, cls.token, cls.modified, atoms, xyz)
+            if cls.polymer == "protein":
+                protein_res.append(rec)
+            else:
+                rna_res.append(rec)
+        if chain_has_unsupported and (protein_res or rna_res):
+            has_unsupported_polymer = True
+        # A polymer chain classified simultaneously as protein and RNA is malformed
+        # for this pilot and therefore treated as unsupported.
         if protein_res and rna_res:
+            has_unsupported_polymer = True
             continue
         if protein_res:
             proteins.append(ChainRecord(chain.name, "protein", protein_res))
         elif rna_res:
             rnas.append(ChainRecord(chain.name, "rna", rna_res))
-    return proteins, rnas, has_dna
+    return proteins, rnas, has_dna, has_unsupported_polymer
 
 
 def _passes_resolution(method: str, resolution: float | None, cfg: ScreenConfig) -> bool:
@@ -173,8 +183,6 @@ def _passes_resolution(method: str, resolution: float | None, cfg: ScreenConfig)
 def _min_distance(a: np.ndarray, b: np.ndarray) -> float:
     if len(a) == 0 or len(b) == 0:
         return float("inf")
-    # Residues are small; the direct broadcast is faster/simpler than building a
-    # global KD-tree and keeps exact residue-pair distances auditable.
     return float(np.linalg.norm(a[:, None, :] - b[None, :, :], axis=-1).min())
 
 
@@ -190,23 +198,33 @@ def _interface_pairs(proteins: list[ChainRecord], rnas: list[ChainRecord], cutof
     return pairs
 
 
+def _missing_fraction(residues, required: set[str]) -> float:
+    residues = list(residues)
+    if not residues:
+        return 1.0
+    missing = sum(len(required - residue.atoms) for residue in residues)
+    return missing / (len(residues) * len(required))
+
+
+def _reference_complete(chain: ChainRecord) -> bool:
+    if chain.polymer == "protein":
+        # ProteinMPNN baseline preparation requires all four backbone atoms.
+        return all(PROTEIN_CORE <= r.atoms for r in chain.residues)
+    # RNA adapter needs a stable sugar reference and frame. P may legitimately be
+    # absent at a terminal nucleotide, so it is not an all-residue hard requirement.
+    return all({"C1'", "C3'", "C4'"} <= r.atoms for r in chain.residues)
+
+
 def _interface_missing_fraction(pairs: list[tuple[ResidueRecord, ResidueRecord, float]]) -> float:
     p_unique = {(x.chain, x.index): x for x, _, _ in pairs}.values()
     r_unique = {(x.chain, x.index): x for _, x, _ in pairs}.values()
-    missing = total = 0
-    for residue in p_unique:
-        total += len(PROTEIN_CORE)
-        missing += len(PROTEIN_CORE - residue.atoms)
-    for residue in r_unique:
-        total += len(RNA_SUGAR_CORE)
-        missing += len(RNA_SUGAR_CORE - residue.atoms)
-    return 1.0 if total == 0 else missing / total
+    p_missing = _missing_fraction(p_unique, PROTEIN_CORE)
+    r_missing = _missing_fraction(r_unique, RNA_SUGAR_CORE)
+    return 0.5 * (p_missing + r_missing)
 
 
 def _selected_contact_chains(pairs):
-    p_names = {p.chain for p, _, _ in pairs}
-    r_names = {r.chain for _, r, _ in pairs}
-    return p_names, r_names
+    return {p.chain for p, _, _ in pairs}, {r.chain for _, r, _ in pairs}
 
 
 def _chain_json(chains: list[ChainRecord]) -> str:
@@ -214,7 +232,7 @@ def _chain_json(chains: list[ChainRecord]) -> str:
 
 
 def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: ScreenConfig) -> tuple[dict | None, str]:
-    """Return (eligible_record, rejection_reason)."""
+    """Return ``(eligible_record, rejection_reason)`` for one coordinate file."""
     pdb_id = path.name.split("-")[0].split(".")[0].upper()
     try:
         title, method, resolution, structure = _metadata(path)
@@ -222,9 +240,11 @@ def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: Scr
         return None, f"parse_error:{type(exc).__name__}"
     if not _passes_resolution(method, resolution, cfg):
         return None, "resolution_or_method"
-    proteins, rnas, has_dna = _chains(structure)
+    proteins, rnas, has_dna, has_unsupported = _chains(structure)
     if has_dna:
         return None, "contains_DNA"
+    if has_unsupported:
+        return None, "unsupported_modified_polymer"
 
     common = {
         "pdb_id": pdb_id,
@@ -238,35 +258,47 @@ def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: Scr
     if kind == "protein":
         if rnas:
             return None, "contains_RNA"
-        eligible = [c for c in proteins if cfg.protein_min_length <= len(c.residues) <= cfg.protein_max_length]
+        eligible = [
+            c
+            for c in proteins
+            if cfg.protein_min_length <= len(c.residues) <= cfg.protein_max_length and _reference_complete(c)
+        ]
         if not eligible:
-            return None, "protein_length"
+            return None, "protein_length_or_backbone_completeness"
         chain = max(eligible, key=lambda c: (len(c.residues), c.chain))
         seq = chain.sequence
         return {
             **common,
             "sample_id": f"{pdb_id}:{chain.chain}",
             "chain_id": chain.chain,
+            "protein_chains": chain.chain,
             "sequence": seq,
             "sequence_hash": sha256_text(seq),
             "length": len(seq),
+            "modified_fraction": chain.modified_fraction,
         }, ""
 
     if kind == "rna":
         if proteins:
             return None, "contains_protein"
-        eligible = [c for c in rnas if cfg.rna_min_length <= len(c.residues) <= cfg.rna_max_length]
+        eligible = [
+            c
+            for c in rnas
+            if cfg.rna_min_length <= len(c.residues) <= cfg.rna_max_length and _reference_complete(c)
+        ]
         if not eligible:
-            return None, "rna_length"
+            return None, "rna_length_or_backbone_completeness"
         chain = max(eligible, key=lambda c: (len(c.residues), c.chain))
         seq = chain.sequence
         return {
             **common,
             "sample_id": f"{pdb_id}:{chain.chain}",
             "chain_id": chain.chain,
+            "rna_chains": chain.chain,
             "sequence": seq,
             "sequence_hash": sha256_text(seq),
             "length": len(seq),
+            "modified_fraction": chain.modified_fraction,
         }, ""
 
     if kind != "complex":
@@ -281,6 +313,8 @@ def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: Scr
     p_names, r_names = _selected_contact_chains(pairs)
     proteins = [c for c in proteins if c.chain in p_names]
     rnas = [c for c in rnas if c.chain in r_names]
+    if not all(_reference_complete(c) for c in proteins + rnas):
+        return None, "selected_chain_reference_atom_missing"
     p_len = sum(len(c.residues) for c in proteins)
     r_len = sum(len(c.residues) for c in rnas)
     if p_len < cfg.protein_min_length or r_len < cfg.rna_min_length:
@@ -311,6 +345,8 @@ def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: Scr
         "interface_residue_pairs": len(pairs),
         "interface_min_distance": min(d for _, _, d in pairs),
         "interface_missing_fraction": missing_fraction,
+        "protein_modified_fraction": sum(c.modified_fraction * len(c.residues) for c in proteins) / p_len,
+        "rna_modified_fraction": sum(c.modified_fraction * len(c.residues) for c in rnas) / r_len,
     }, ""
 
 
