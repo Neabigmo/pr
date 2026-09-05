@@ -1,10 +1,4 @@
-"""Command-line entrypoints for the pilot.
-
-The CLI is intentionally conservative: operations that would consume real
-structures are routed through explicit adapter functions. If an adapter is not
-implemented for a local dataset schema, the command fails with a precise error
-rather than generating placeholder results.
-"""
+"""Command-line interface for the complete mini-pilot."""
 from __future__ import annotations
 
 import argparse
@@ -12,128 +6,122 @@ from pathlib import Path
 import json
 
 import pandas as pd
+import torch
 import yaml
 
-from pr_pilot.data.manifest import FrozenCounts, freeze_single_molecule_pool, freeze_complex_pool, assert_no_test_leakage
+from pr_pilot.data.manifest import FrozenCounts, assert_no_test_leakage, assert_pretraining_disjoint, freeze_complex_pool, freeze_single_molecule_pool
 from pr_pilot.evaluation.battery import mandatory_test_registry
+from pr_pilot.evaluation.runner import evaluate_holdout, load_model, _move
+from pr_pilot.inference.sampler import sample_joint
+from pr_pilot.runtime.gemmi_adapter import GemmiStructureAdapter
+from pr_pilot.runtime.manifest_dataset import ManifestTable, load_complex_row
+from pr_pilot.training.engine import train_stage
+from pr_pilot.training.stages import Stage
+
+PAA="ACDEFGHIKLMNPQRSTVWY"; RNA="AUGC"
 
 
 def load_config(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    with path.open("r",encoding="utf-8") as f: return yaml.safe_load(f)
 
 
-def cmd_freeze(args: argparse.Namespace) -> None:
-    cfg = load_config(args.config)
-    seed = int(cfg["experiment"]["pilot_seed"])
-    out = args.out
-    out.mkdir(parents=True, exist_ok=True)
-    freeze_single_molecule_pool(args.proteins, out, "protein", seed)
-    freeze_single_molecule_pool(args.rnas, out, "rna", seed + 101)
-    freeze_complex_pool(args.complexes, out, seed + 202, require_strict_bilateral=cfg["experiment"]["strict_mode"])
-    print(f"Frozen manifests written to {out}")
+def _counts(cfg:dict)->FrozenCounts:
+    s=cfg["sampling"]
+    return FrozenCounts(int(s["protein_pool_size"]),int(s["protein_train"]),int(s["protein_val"]),int(s["rna_pool_size"]),int(s["rna_train"]),int(s["rna_val"]),int(s["complex_pool_size"]),int(s["complex_dev"]),int(s["complex_test"]),int(s["complex_train"]),int(s["complex_val"]))
 
 
-def _read_tsv(path: Path) -> pd.DataFrame:
-    return pd.read_csv(path, sep="\t")
+def cmd_freeze(args: argparse.Namespace)->None:
+    """Freeze complex test first, then purge it from both prior pools."""
+    cfg=load_config(args.config); seed=int(cfg["experiment"]["pilot_seed"]); counts=_counts(cfg); out=args.out; out.mkdir(parents=True,exist_ok=True)
+    paths=freeze_complex_pool(args.complexes,out,seed+202,counts,require_strict_bilateral=bool(cfg["experiment"]["strict_mode"]),strict_validation=bool(cfg["leakage"].get("strict_validation",True)))
+    freeze_single_molecule_pool(args.proteins,out,"protein",seed,paths["test"],counts)
+    freeze_single_molecule_pool(args.rnas,out,"rna",seed+101,paths["test"],counts)
+    print(f"Frozen manifests written to {out}; final test was frozen before prior pools.")
 
 
-def cmd_audit_data(args: argparse.Namespace) -> None:
-    root = args.manifest_root
-    out = args.out
-    out.mkdir(parents=True, exist_ok=True)
-    expected = {
-        "protein_pool.tsv": 1000,
-        "protein_train.tsv": 900,
-        "protein_val.tsv": 100,
-        "rna_pool.tsv": 1000,
-        "rna_train.tsv": 900,
-        "rna_val.tsv": 100,
-        "complex_pool.tsv": 1100,
-        "complex_dev.tsv": 1000,
-        "complex_train.tsv": 900,
-        "complex_val.tsv": 100,
-        "complex_test.tsv": 100,
-    }
-    report = {"counts": {}, "errors": [], "warnings": []}
-    for name, n in expected.items():
-        path = root / name
-        if not path.exists():
-            report["errors"].append(f"missing {name}")
-            continue
-        got = len(_read_tsv(path))
-        report["counts"][name] = got
-        if got != n:
-            report["errors"].append(f"{name}: expected {n}, got {got}")
+def _read(path:Path)->pd.DataFrame: return pd.read_csv(path,sep="\t")
 
+
+def cmd_audit_data(args:argparse.Namespace)->None:
+    cfg=load_config(args.config); root=args.manifest_root; out=args.out; out.mkdir(parents=True,exist_ok=True); counts=_counts(cfg)
+    expected={"protein_pool.tsv":counts.protein_pool,"protein_train.tsv":counts.protein_train,"protein_val.tsv":counts.protein_val,"rna_pool.tsv":counts.rna_pool,"rna_train.tsv":counts.rna_train,"rna_val.tsv":counts.rna_val,"complex_pool.tsv":counts.complex_pool,"complex_dev.tsv":counts.complex_dev,"complex_train.tsv":counts.complex_train,"complex_val.tsv":counts.complex_val,"complex_test.tsv":counts.complex_test}
+    report={"counts":{},"errors":[],"warnings":[]}
+    for name,n in expected.items():
+        p=root/name
+        if not p.exists(): report["errors"].append(f"missing {name}"); continue
+        got=len(_read(p)); report["counts"][name]=got
+        if got!=n: report["errors"].append(f"{name}: expected {n}, got {got}")
     if not report["errors"]:
-        train = _read_tsv(root / "complex_train.tsv")
-        val = _read_tsv(root / "complex_val.tsv")
-        test = _read_tsv(root / "complex_test.tsv")
+        train,val,test=_read(root/"complex_train.tsv"),_read(root/"complex_val.tsv"),_read(root/"complex_test.tsv")
         try:
-            assert_no_test_leakage(train, val, test, strict_cluster_check=True)
-        except Exception as exc:
-            report["errors"].append(str(exc))
-
-        if not test["experimental"].astype(bool).all():
-            report["errors"].append("Final 100 test set contains non-experimental structures")
-
-    (out / "manifest_audit.json").write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    mandatory_test_registry().to_csv(out / "mandatory_test_registry.tsv", sep="\t", index=False)
-    if report["errors"]:
-        raise SystemExit("Data audit FAILED; inspect manifest_audit.json")
-    print("Data audit passed. Geometry/interface audits require the local structure adapter and must run before training.")
+            assert_no_test_leakage(train,val,test,strict_cluster_check=bool(cfg["experiment"]["strict_mode"]))
+            assert_pretraining_disjoint(_read(root/"protein_pool.tsv"),_read(root/"rna_pool.tsv"),test)
+        except Exception as exc: report["errors"].append(str(exc))
+        if not test["experimental"].astype(bool).all(): report["errors"].append("Final test contains non-experimental structures")
+    (out/"manifest_audit.json").write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8"); mandatory_test_registry().to_csv(out/"mandatory_test_registry.tsv",sep="\t",index=False)
+    if report["errors"]: raise SystemExit("Data audit FAILED; inspect manifest_audit.json")
+    print("Data audit passed, including final-test purge from both structural-prior pools.")
 
 
-def cmd_train(args: argparse.Namespace) -> None:
-    # Training is routed to a project-local structure dataset adapter because raw
-    # structure storage differs across installations. We fail rather than pretend
-    # to train without a parser. The model/loss/stage code is already implemented.
-    raise SystemExit(
-        "Training command reached before local structure adapter registration. "
-        "Implement pr_pilot.runtime.dataset_adapter.load_structure_sample for your frozen mmCIF/PDB layout, "
-        "then connect it to the generic stage loop. See docs/IMPLEMENTATION_CONTRACT.md."
-    )
+def _default_manifests(root:Path,stage:Stage)->tuple[Path,Path]:
+    if stage==Stage.PROTEIN_PRIOR: return root/"protein_train.tsv",root/"protein_val.tsv"
+    if stage==Stage.RNA_PRIOR: return root/"rna_train.tsv",root/"rna_val.tsv"
+    return root/"complex_train.tsv",root/"complex_val.tsv"
 
 
-def cmd_registry(args: argparse.Namespace) -> None:
-    print(mandatory_test_registry().to_string(index=False))
+def cmd_train(args:argparse.Namespace)->None:
+    cfg=load_config(args.config); stage=Stage(args.stage)
+    train,val=(args.manifest,args.validation) if args.manifest and args.validation else _default_manifests(args.manifest_root,stage)
+    best=train_stage(cfg,stage,train,val,args.out,args.init_checkpoint,args.device); print(best)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="pr-pilot")
-    sub = p.add_subparsers(dest="command", required=True)
+def cmd_train_all(args:argparse.Namespace)->None:
+    cfg=load_config(args.config); root=args.manifest_root; ckpt=None
+    order=[Stage.PROTEIN_PRIOR,Stage.RNA_PRIOR,Stage.GLOBAL_C,Stage.DELTA_C,Stage.ALPHA,Stage.JOINT]
+    for stage in order:
+        if not bool(cfg["training_stages"][stage.value].get("enabled",True)): continue
+        train,val=_default_manifests(root,stage); stage_out=args.out/stage.value
+        ckpt=train_stage(cfg,stage,train,val,stage_out,ckpt,args.device); print(f"{stage.value}: {ckpt}")
+    if ckpt is None: raise SystemExit("No stage enabled")
+    (args.out/"FINAL_CHECKPOINT.txt").write_text(str(ckpt),encoding="utf-8")
 
-    f = sub.add_parser("freeze")
-    f.add_argument("--config", type=Path, required=True)
-    f.add_argument("--proteins", type=Path, required=True)
-    f.add_argument("--rnas", type=Path, required=True)
-    f.add_argument("--complexes", type=Path, required=True)
-    f.add_argument("--out", type=Path, required=True)
-    f.set_defaults(func=cmd_freeze)
 
-    a = sub.add_parser("audit-data")
-    a.add_argument("--config", type=Path, required=True)
-    a.add_argument("--manifest-root", type=Path, required=True)
-    a.add_argument("--out", type=Path, required=True)
-    a.set_defaults(func=cmd_audit_data)
+def _adapter_for_eval(cfg:dict)->GemmiStructureAdapter:
+    g=cfg["geometry"]
+    return GemmiStructureAdapter(int(g["rbf_bins"]),int(g["intra_max_neighbors"]),float(g["pr_cutoff_angstrom"]),int(g["pr_max_neighbors"]),0.0,int(cfg["experiment"]["pilot_seed"]),bool(g["rich_pr_geometry"]))
 
-    t = sub.add_parser("train")
-    t.add_argument("--stage", required=True, choices=["protein_prior", "rna_prior", "global_c", "delta_c", "alpha", "joint"])
-    t.add_argument("--config", type=Path, required=True)
-    t.add_argument("--manifest", type=Path, required=True)
-    t.add_argument("--validation", type=Path, required=True)
-    t.set_defaults(func=cmd_train)
 
-    r = sub.add_parser("test-registry")
-    r.set_defaults(func=cmd_registry)
+def cmd_sample(args:argparse.Namespace)->None:
+    cfg=load_config(args.config); device=torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu")); model=load_model(args.checkpoint,cfg,device); adapter=_adapter_for_eval(cfg); table=ManifestTable(args.manifest); args.out.mkdir(parents=True,exist_ok=True); rows=[]
+    icfg=cfg["inference"]; spir=icfg["spir"]
+    for row in table.rows():
+        s=_move(load_complex_row(adapter,row),device)
+        cands=sample_joint(model,s,int(icfg["candidates_per_complex"]),float(icfg["initial_temperature"]),int(cfg["experiment"]["pilot_seed"]),bool(spir["enabled"]),float(spir["reopen_fraction"]),float(spir["temperature"]),int(spir["cycles"]),float(spir["reverse_direction_fraction"]))
+        for c in cands:
+            rows.append({"sample_id":s.sample_id,"candidate_id":c.candidate_id,"protein_sequence":"".join(PAA[int(x)] for x in c.protein_tokens.cpu()),"rna_sequence":"".join(RNA[int(x)] for x in c.rna_tokens.cpu()),"pre_spir_protein":"".join(PAA[int(x)] for x in c.pre_spir_protein.cpu()),"pre_spir_rna":"".join(RNA[int(x)] for x in c.pre_spir_rna.cpu()),"spir_direction":c.spir_direction,"spir_cycles":c.spir_cycles,"mean_generation_logprob":sum(c.token_logprobs)/max(1,len(c.token_logprobs))})
+    pd.DataFrame(rows).to_csv(args.out/"candidates.tsv",sep="\t",index=False)
+
+
+def cmd_evaluate(args:argparse.Namespace)->None:
+    cfg=load_config(args.config); summary=evaluate_holdout(cfg,args.checkpoint,args.manifest,args.out,args.device,args.model_name); print(json.dumps(summary,indent=2))
+
+
+def cmd_registry(args:argparse.Namespace)->None: print(mandatory_test_registry().to_string(index=False))
+
+
+def build_parser()->argparse.ArgumentParser:
+    p=argparse.ArgumentParser(prog="pr-pilot"); sub=p.add_subparsers(dest="command",required=True)
+    f=sub.add_parser("freeze"); f.add_argument("--config",type=Path,required=True); f.add_argument("--proteins",type=Path,required=True); f.add_argument("--rnas",type=Path,required=True); f.add_argument("--complexes",type=Path,required=True); f.add_argument("--out",type=Path,required=True); f.set_defaults(func=cmd_freeze)
+    a=sub.add_parser("audit-data"); a.add_argument("--config",type=Path,required=True); a.add_argument("--manifest-root",type=Path,required=True); a.add_argument("--out",type=Path,required=True); a.set_defaults(func=cmd_audit_data)
+    t=sub.add_parser("train"); t.add_argument("--stage",required=True,choices=[x.value for x in Stage]); t.add_argument("--config",type=Path,required=True); t.add_argument("--manifest-root",type=Path,default=Path("manifests")); t.add_argument("--manifest",type=Path); t.add_argument("--validation",type=Path); t.add_argument("--init-checkpoint",type=Path); t.add_argument("--out",type=Path,required=True); t.add_argument("--device"); t.set_defaults(func=cmd_train)
+    ta=sub.add_parser("train-all"); ta.add_argument("--config",type=Path,required=True); ta.add_argument("--manifest-root",type=Path,required=True); ta.add_argument("--out",type=Path,required=True); ta.add_argument("--device"); ta.set_defaults(func=cmd_train_all)
+    s=sub.add_parser("sample-joint"); s.add_argument("--config",type=Path,required=True); s.add_argument("--checkpoint",type=Path,required=True); s.add_argument("--manifest",type=Path,required=True); s.add_argument("--out",type=Path,required=True); s.add_argument("--device"); s.set_defaults(func=cmd_sample)
+    e=sub.add_parser("evaluate"); e.add_argument("--config",type=Path,required=True); e.add_argument("--checkpoint",type=Path,required=True); e.add_argument("--manifest",type=Path,required=True); e.add_argument("--out",type=Path,required=True); e.add_argument("--device"); e.add_argument("--model-name",default="DMICF"); e.set_defaults(func=cmd_evaluate)
+    r=sub.add_parser("test-registry"); r.set_defaults(func=cmd_registry)
     return p
 
 
-def main() -> None:
-    args = build_parser().parse_args()
-    args.func(args)
+def main()->None:
+    args=build_parser().parse_args(); args.func(args)
 
-
-if __name__ == "__main__":
-    main()
+if __name__=="__main__": main()
