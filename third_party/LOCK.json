@@ -1,0 +1,27 @@
+{
+  "proteinmpnn": {
+    "name": "ProteinMPNN",
+    "repository": "https://github.com/dauparas/ProteinMPNN",
+    "commit": "8907e6671bfbfc92303b5f79c4b5e6ce47cdef57",
+    "checkout": "third_party/proteinmpnn",
+    "training_entrypoint": "training/training.py",
+    "use_published_pretrained_weights_in_primary_baseline": false,
+    "primary_budget": "150 epochs; 0.10 A backbone noise; exact frozen 900/100 IDs"
+  },
+  "rna_fixbb": {
+    "name": "MPNN-fixbb / NA-MPNN",
+    "repository": "https://github.com/baker-laboratory/NA-MPNN",
+    "commit": "9fabc2482092b725e067969fba21297a806b6fda",
+    "checkout": "third_party/na_mpnn",
+    "training_entrypoint": "na_run.py",
+    "use_published_pretrained_weights_in_primary_baseline": false,
+    "primary_budget": "~150 data passes estimated under official token batching; RNA_BACKBONE_NOISE=0.10 A; exact frozen 900/100 IDs"
+  },
+  "rules": [
+    "These SHAs were frozen on 2026-09-05 before pilot execution.",
+    "Never move an upstream checkout for a reported run without creating a new experiment version.",
+    "Primary baselines start from random initialization. Published weights are reported only in a separate reference track.",
+    "All preprocessing losses/exclusions are reported; samples are never silently replaced for only one method.",
+    "The same final-refit rule and candidate/evaluator budgets are used across methods when the task permits."
+  ]
+}
