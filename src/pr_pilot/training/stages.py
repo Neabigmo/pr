@@ -2,8 +2,10 @@
 
 Primary scientific ownership is deliberately strict:
 C -> (q, DeltaC) -> alpha -> joint coordination.
-The global C anchor remains frozen during the primary joint stage.  Scratch
-controls may explicitly request all-trainable joint optimization from step 0.
+The global C anchor remains frozen during the primary joint stage.  A genuinely
+fresh scratch-joint model is detected from the exact zero-initialized contextual
+heads and is marked ``_scratch_joint_mode`` so gradual unfreezing can never
+silently handicap that control.
 """
 from __future__ import annotations
 
@@ -91,25 +93,43 @@ def _set_module(module: nn.Module, value: bool) -> None:
 
 
 def set_all_trainable(model: JointPriorAndFieldModel, value: bool = True) -> None:
-    """Explicit helper for scratch controls; never used by primary pretrained joint."""
     for p in model.parameters():
         p.requires_grad = value
+
+
+def _tensor_is_exact_zero(tensor: torch.Tensor) -> bool:
+    return bool(torch.count_nonzero(tensor.detach()).item() == 0)
+
+
+def _looks_like_fresh_scratch_joint(model: JointPriorAndFieldModel) -> bool:
+    """Identify the component-ladder scratch model before any complex training.
+
+    DeltaC output and learned-alpha residual are deliberately initialized to exact
+    zeros.  A primary model arriving from Delta/Alpha training should no longer
+    satisfy this exact-zero signature.  We use this only to protect the explicit
+    scratch control from a pretrained-specific freezing schedule; the mode is
+    recorded on the model and in checkpoints/metrics by the caller.
+    """
+    return (
+        _tensor_is_exact_zero(model.dmicf.delta.out.weight)
+        and _tensor_is_exact_zero(model.dmicf.delta.out.bias)
+        and _tensor_is_exact_zero(model.dmicf.relevance.score.weight)
+        and _tensor_is_exact_zero(model.dmicf.relevance.score.bias)
+    )
 
 
 def apply_joint_unfreezing(
     model: JointPriorAndFieldModel, progress: float
 ) -> dict[str, int]:
-    """Gradually release pretrained encoders while keeping global C fixed.
+    """Release pretrained encoders gradually, unless this is the scratch control."""
+    if bool(getattr(model, "_scratch_joint_mode", False)):
+        set_all_trainable(model, True)
+        return {
+            "protein": len(model.protein_encoder.message),
+            "rna": len(model.rna_encoder.message),
+        }
 
-    The contextual interaction network, DeltaC, alpha/relevance, token-context
-    decoders, output heads and bounded lambda gains may adapt.  ``global_c`` is a
-    stage-1 anchor and remains frozen so later PMI interpretation is not silently
-    changed by joint fine-tuning.
-    """
     progress = float(min(max(progress, 0.0), 1.0))
-
-    # Start from a known frozen state for the DM-ICF container, then release only
-    # the contextual components.  The global C parameter stays frozen.
     _set_module(model.dmicf, False)
     _set_module(model.dmicf.interaction, True)
     _set_module(model.dmicf.delta, True)
@@ -145,14 +165,17 @@ def apply_joint_unfreezing(
 def configure_stage(model: JointPriorAndFieldModel, stage: Stage) -> StageContract:
     set_trainable_stage(model, stage.value)
     if stage == Stage.ALPHA:
-        # Primary alpha stage is intentionally identifiable: q and DeltaC are
-        # frozen after Stage Delta, and only relevance/tau learns who matters.
         _set_module(model.dmicf.interaction, False)
         _set_module(model.dmicf.delta, False)
         _set_module(model.dmicf.global_c, False)
         _set_module(model.dmicf.relevance, True)
     elif stage == Stage.JOINT:
-        apply_joint_unfreezing(model, 0.0)
+        scratch = _looks_like_fresh_scratch_joint(model)
+        model._scratch_joint_mode = scratch
+        if scratch:
+            set_all_trainable(model, True)
+        else:
+            apply_joint_unfreezing(model, 0.0)
     return CONTRACTS[stage]
 
 
@@ -185,7 +208,6 @@ def _encoder_layer_groups(
     decay: float,
     wd: float,
 ) -> list[dict]:
-    """Layer-wise discriminative LR; includes frozen params for later release."""
     n = len(enc.message)
     groups: list[dict] = []
     for idx in range(n):
@@ -261,9 +283,13 @@ def build_optimizer(
                 layerwise_lr_decay,
                 weight_decay,
             ),
-            # Included for scratch controls. In primary joint training this
-            # parameter remains requires_grad=False and therefore cannot drift.
-            _group([model.dmicf.global_c.raw], lr_global_c_joint, 0.0),
+            _group(
+                [model.dmicf.global_c.raw],
+                lr_projections
+                if bool(getattr(model, "_scratch_joint_mode", False))
+                else lr_global_c_joint,
+                0.0,
+            ),
             _group(
                 [model.dmicf.raw_lambda_p, model.dmicf.raw_lambda_r],
                 lr_projections,
