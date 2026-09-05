@@ -11,7 +11,15 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+# When invoked as ``python tools/preflight_official_baselines.py``, Python places
+# tools/ rather than the repository root at sys.path[0]. Add the root explicitly
+# so this script and CI can import sibling tools as a namespace package.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from pr_pilot.baselines.wrappers import ensure_lock_file, pinned_upstream
 from tools.evaluate_official_baselines import _rna_columns
@@ -55,10 +63,7 @@ def preflight(repo_root: Path, third_party_root: Path, clone: bool = False) -> d
     if clone:
         checkouts = clone_locked(repo_root, third_party_root)
     else:
-        checkouts = {
-            "ProteinMPNN": third_party_root / "ProteinMPNN",
-            "NA-MPNN": third_party_root / "NA-MPNN",
-        }
+        checkouts = {"ProteinMPNN": third_party_root / "ProteinMPNN", "NA-MPNN": third_party_root / "NA-MPNN"}
     checkout_status = {}
     for name, path in checkouts.items():
         if path.exists():
@@ -73,16 +78,7 @@ def preflight(repo_root: Path, third_party_root: Path, clone: bool = False) -> d
         else:
             checkout_status[name] = {"present": False, "note": "run with --clone before training"}
 
-    dummy_repo = repo_root
-    protein_cmd = _protein_command(
-        dummy_repo,
-        checkouts["ProteinMPNN"],
-        Path("PREPARED_PROTEIN_ROOT"),
-        Path("OUTPUT"),
-        7,
-        3,
-        900,
-    )
+    protein_cmd = _protein_command(repo_root, checkouts["ProteinMPNN"], Path("PREPARED_PROTEIN_ROOT"), Path("OUTPUT"), 7, 3, 900)
     p_forward = _forwarded_after_separator(protein_cmd)
     flags = _flags(p_forward)
     unknown = flags - PROTEIN_ALLOWED
@@ -97,7 +93,7 @@ def preflight(repo_root: Path, third_party_root: Path, clone: bool = False) -> d
     if p_forward[mp + 1] not in {"True", "False"}:
         raise AssertionError("ProteinMPNN mixed_precision requires an explicit bool value")
 
-    na_cmd = _na_command(dummy_repo, checkouts["NA-MPNN"], Path("run.json"), 7)
+    na_cmd = _na_command(repo_root, checkouts["NA-MPNN"], Path("run.json"), 7)
     na_forward = _forwarded_after_separator(na_cmd)
     if na_forward != ["run.json"]:
         raise AssertionError(f"Pinned NA-MPNN na_run.py must receive one positional JSON, got {na_forward}")
@@ -106,7 +102,7 @@ def preflight(repo_root: Path, third_party_root: Path, clone: bool = False) -> d
     if columns != [0, 3, 2, 1]:
         raise AssertionError(f"NA-MPNN shared-token AUGC order is wrong: {columns}")
 
-    report = {
+    return {
         "lock_valid": True,
         "locked_shas": {name: pinned_upstream(name, lock).commit for name in expected},
         "checkout_status": checkout_status,
@@ -115,7 +111,6 @@ def preflight(repo_root: Path, third_party_root: Path, clone: bool = False) -> d
         "na_augc_probability_mapping": "PASS",
         "gpu_required": False,
     }
-    return report
 
 
 def main() -> None:
