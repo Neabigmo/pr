@@ -4,6 +4,7 @@ experiment:
   strict_mode: true
   output_root: artifacts
   fail_on_test_leakage: true
+  primary_training_seeds: [20260905, 20260906, 20260907]
 
 sampling:
   protein_pool_size: 1000
@@ -18,6 +19,7 @@ sampling:
   complex_train: 900
   complex_val: 100
   final_refit_on_full_dev: true
+  final_refit_rule: "use validation-selected epoch count; no further hyperparameter selection"
   forbid_predicted_structures: true
 
 structure_filters:
@@ -36,6 +38,8 @@ leakage:
   protein_strict_cluster: P30
   rna_sequence_cluster: R80
   require_rfam_holdout_when_available: true
+  strict_validation: true
+  purge_final_test_from_single_molecule_pretraining: true
   group_conformers: true
   group_mutation_series: true
   group_exact_pair: true
@@ -44,6 +48,7 @@ geometry:
   hidden_dim: 256
   protein_layers: 6
   rna_layers: 6
+  decoder_layers: 2
   interaction_layers: 3
   pr_cutoff_angstrom: 8.0
   pr_max_neighbors: 12
@@ -73,10 +78,14 @@ loss:
   normalize_rna_by_log_alphabet: true
   equalize_interface_noninterface_groups: true
   equalize_protein_rna_in_joint: true
-  c_l2_enabled: true
+  # Disabled in the primary run: C already starts tiny and a dynamically scaled
+  # regularizer would make its interpretation less clean. A fixed-coefficient C-L2
+  # run remains an optional ablation.
+  c_l2_enabled: false
   c_l2_target_fraction: 0.02
   delta_c_norm_penalty: 0.0
   alpha_entropy_warmup_weight: 0.01
+  alpha_entropy_warmup_fraction: 0.10
   alpha_entropy_warmup_steps: 1000
 
 optimization:
@@ -93,27 +102,54 @@ optimization:
   precision: bf16
   layerwise_lr_decay: 0.85
   early_stopping_patience: 15
+  max_epochs_default: 100
 
 training_stages:
   protein_prior:
     enabled: true
+    max_epochs: 150
   rna_prior:
     enabled: true
+    max_epochs: 150
   global_c:
     enabled: true
+    max_epochs: 80
     conditional_task_ratio: [1, 1]
-    hard_context_fraction_late: 0.20
+    hard_context_fraction_late: 0.0
+    lambda_fixed_to_one: true
   delta_c:
     enabled: true
+    max_epochs: 100
     zero_init_output: true
+    lambda_fixed_to_one: true
   alpha:
     enabled: true
+    max_epochs: 80
     zero_init_score_residual: true
+    lambda_fixed_to_one: true
   joint:
     enabled: true
+    max_epochs: 150
     task_ratio_start: [2, 2, 1]
     task_ratio_end: [1, 1, 1]
     gradual_unfreezing: true
+    learn_bounded_lambda: true
+
+fairness_controls:
+  # Primary evidence for DM-ICF must come from same-data internal controls, not
+  # merely from beating external models trained under different data regimes.
+  partner_blind_complex_control: true
+  no_partner_identity_capacity_control: true
+  parameter_count_report: true
+  rich_geometry_vs_distance_only: true
+  fixed_distance_alpha_vs_learned_alpha: true
+  fixed_training_pmi_matrix_baseline: true
+  official_baselines_primary_from_scratch: true
+  official_baselines_use_same_single_molecule_ids: true
+  baseline_final_refit_on_full_1000: true
+  external_published_checkpoints_report_separately: true
+  matched_candidate_budget: true
+  matched_external_predictor_budget: true
 
 inference:
   candidates_per_complex: 64
@@ -127,6 +163,10 @@ inference:
     cycles: 1
 
 evaluation:
+  statistical_unit: complex
+  joint_teacher_forced_orders: 5
+  scramble_repeats: 20
+  counterfactual_max_partner_sites: 16
   noise_levels_angstrom: [0.0, 0.05, 0.10, 0.20]
   pr_edge_drop_levels: [0.0, 0.05, 0.10, 0.20]
   partner_hide_levels: [0.0, 0.10, 0.20, 0.40]
@@ -139,6 +179,10 @@ evaluation:
   run_pmi_validation: true
   run_delta_c_analysis: true
   run_alpha_analysis: true
+  run_alpha_causal_edge_ablation: true
+  run_geometry_permutation_control: true
   run_calibration: true
   run_order_sensitivity: true
   run_spir_ablation: true
+  run_partner_blind_control: true
+  run_capacity_control: true
