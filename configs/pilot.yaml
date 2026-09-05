@@ -27,11 +27,16 @@ structure_filters:
   exclude_spliceosome: true
   require_biological_assembly: true
   protein_min_length: 30
+  protein_max_length: 1000
   rna_min_length: 5
+  rna_max_length: 500
   max_total_tokens: 1000
   max_resolution_angstrom: 4.0
   preferred_resolution_angstrom: 3.5
+  allow_nmr_without_resolution: true
   require_interface_contact: true
+  interface_contact_angstrom: 6.0
+  min_interfacial_residue_pairs: 3
   max_interface_missing_fraction: 0.10
 
 leakage:
@@ -64,6 +69,10 @@ geometry:
 masking:
   min_fraction: 0.10
   max_fraction: 1.00
+  curriculum: true
+  # Exact 100% masking must appear with non-zero probability; a continuous
+  # Uniform(0.1,1.0) draw would otherwise almost never produce full-mask input.
+  full_mask_probability: 0.15
   random_mask_probability: 0.70
   local_patch_probability: 0.30
   wrong_token_fraction_within_corruption: 0.10
@@ -78,15 +87,13 @@ loss:
   normalize_rna_by_log_alphabet: true
   equalize_interface_noninterface_groups: true
   equalize_protein_rna_in_joint: true
-  # Disabled in the primary run: C already starts tiny and a dynamically scaled
-  # regularizer would make its interpretation less clean. A fixed-coefficient C-L2
-  # run remains an optional ablation.
+  # Primary C learning does not need an adaptive L2 term; keep this disabled.
+  # If studied later, use a fixed coefficient selected on development data only.
   c_l2_enabled: false
   c_l2_target_fraction: 0.02
   delta_c_norm_penalty: 0.0
   alpha_entropy_warmup_weight: 0.01
   alpha_entropy_warmup_fraction: 0.10
-  alpha_entropy_warmup_steps: 1000
 
 optimization:
   optimizer: adamw
@@ -115,17 +122,21 @@ training_stages:
     enabled: true
     max_epochs: 80
     conditional_task_ratio: [1, 1]
-    hard_context_fraction_late: 0.0
+    # In the later half of C learning, 20% of samples use the most structurally
+    # surprising interface positions; partner scrambling remains evaluation-only.
+    hard_context_fraction_late: 0.20
     lambda_fixed_to_one: true
   delta_c:
     enabled: true
     max_epochs: 100
     zero_init_output: true
+    hard_context_fraction_late: 0.0
     lambda_fixed_to_one: true
   alpha:
     enabled: true
     max_epochs: 80
     zero_init_score_residual: true
+    hard_context_fraction_late: 0.0
     lambda_fixed_to_one: true
   joint:
     enabled: true
@@ -136,10 +147,12 @@ training_stages:
     learn_bounded_lambda: true
 
 fairness_controls:
-  # Primary evidence for DM-ICF must come from same-data internal controls, not
-  # merely from beating external models trained under different data regimes.
+  # Primary evidence for DM-ICF comes from same-data internal controls. External
+  # ProteinMPNN/NA-MPNN runs are important references but do not receive partner
+  # identity, so they are not the sole causal controls for DM-ICF.
   partner_blind_complex_control: true
   no_partner_identity_capacity_control: true
+  global_c_backbone_only_context_control: true
   parameter_count_report: true
   rich_geometry_vs_distance_only: true
   fixed_distance_alpha_vs_learned_alpha: true
@@ -167,6 +180,10 @@ evaluation:
   joint_teacher_forced_orders: 5
   scramble_repeats: 20
   counterfactual_max_partner_sites: 16
+  geometry_permutation_repeats: 10
+  alpha_ablation_max_targets: 32
+  repeated_spir_cycles: 3
+  pmi_permutation_repeats: 1000
   noise_levels_angstrom: [0.0, 0.05, 0.10, 0.20]
   pr_edge_drop_levels: [0.0, 0.05, 0.10, 0.20]
   partner_hide_levels: [0.0, 0.10, 0.20, 0.40]
