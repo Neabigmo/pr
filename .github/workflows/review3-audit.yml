@@ -1,0 +1,58 @@
+name: review3-hardening-audit
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: review3-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install project
+        run: python -m pip install -e '.[dev]'
+      - name: Compile
+        run: python -m compileall -q src tests tools
+      - name: Scientific contract tests
+        run: python -m pytest -q
+      - name: No dead runtime-looking config keys
+        run: python tools/audit_config_usage.py --config configs/pilot.yaml
+      - name: Correctness lint
+        run: ruff check src tests tools --select E9,F63,F7,F82
+      - name: Hardened CLI smoke
+        run: |
+          python -m pr_pilot.cli --help >/dev/null
+          python tools/run_primary_training_only.py --help >/dev/null
+          python tools/run_internal_controls.py --help >/dev/null
+          python tools/profile_evaluation_budget.py --help >/dev/null
+          python tools/freeze_evaluation_protocol.py --help >/dev/null
+          python tools/run_primary_final_evaluation.py --help >/dev/null
+          python tools/evaluate_component_controls.py --help >/dev/null
+          python tools/run_official_baselines.py --help >/dev/null
+          python tools/preflight_official_baselines.py --help >/dev/null
+          python tools/prepare_baseline_holdout.py --help >/dev/null
+          python tools/run_official_baseline_final_evaluation.py --help >/dev/null
+          python tools/run_confirmatory_statistics.py --help >/dev/null
+          python tools/run_statistical_controls.py --help >/dev/null
+          python tools/audit_delta_c_drift.py --help >/dev/null
+          python tools/audit_frozen_complexes.py --help >/dev/null
+          python tools/post_freeze_similarity_audit.py --help >/dev/null
+          python -m pr_pilot.evaluation.full_suite --help >/dev/null
