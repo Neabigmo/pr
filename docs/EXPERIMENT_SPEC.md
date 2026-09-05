@@ -1,681 +1,361 @@
-# PR Mini-Pilot — Frozen Experimental Specification
+# PR Mini-Pilot — Frozen Experimental Specification v3
 
 ## 0. Purpose
 
-This repository implements a **small but complete, falsifiable pilot** for fixed-backbone protein/RNA inverse folding and joint protein–RNA co-design. It is intentionally small enough to run before the full dataset is ready, but it must exercise every algorithmic component that will later exist in the full study.
-
-The pilot has four non-negotiable goals:
-
-1. reproduce a small ProteinMPNN protein inverse-folding baseline on exactly 1,000 frozen protein structures;
-2. reproduce a small MPNN-fixbb/NA-MPNN RNA inverse-folding baseline on exactly 1,000 frozen RNA structures;
-3. train the full DM-ICF pipeline **from scratch** using the same 1,000 protein structures, the same 1,000 RNA structures, and 1,000 protein–RNA complexes;
-4. evaluate all frozen models on 100 completely held-out experimental protein–RNA complexes using a deliberately broad battery of sequence, interface, partner-dependence, robustness, calibration, ablation, interpretability and inference tests.
-
-No part of the held-out 100 may be used for model selection, early stopping, threshold selection, architecture selection, noise selection, SPIR selection or plotting choices.
-
----
-
-## 1. Frozen sample counts
-
-### 1.1 Protein structural-prior pool
-
-- exactly 1,000 experimental protein structures;
-- sampled reproducibly from the eligible protein corpus using `pilot_seed`;
-- no RNA/DNA/ligand partner is required for the protein-only view;
-- native side-chain atoms are never used as model inputs;
-- ProteinMPNN baseline and DM-ICF protein prior receive **the identical manifest**.
-
-Internal development split:
-
-- 900 train;
-- 100 validation.
-
-After all hyperparameters are frozen, an optional final-refit mode may train on all 1,000 structures. The selected hyperparameters must not change after this refit.
-
-### 1.2 RNA structural-prior pool
-
-- exactly 1,000 experimental RNA structures;
-- same sampling and manifest-freezing principles as protein;
-- only sequence-neutral sugar–phosphate geometry is exposed to our DM-ICF RNA prior;
-- native base-ring atoms/N1/N9 must not leak nucleotide identity into our model view;
-- MPNN-fixbb/NA-MPNN baseline and DM-ICF RNA prior receive **the identical RNA manifest** to the extent compatible with each upstream baseline’s required preprocessing.
-
-Internal development split:
-
-- 900 train;
-- 100 validation.
-
-### 1.3 Protein–RNA complex pool
-
-Start from exactly 1,100 eligible **experimental** protein–RNA complexes after QC and biological-assembly parsing.
-
-Freeze once:
-
-- `complex_dev_1000.tsv`: 1,000 complexes;
-- `complex_test_100.tsv`: 100 complexes.
-
-The 100 test complexes are immutable. They are not available to any training script except through evaluation-only dataloaders protected by `assert_test_only=True`.
-
-Development split:
-
-- 900 complex train;
-- 100 complex validation.
-
-Optional final-refit:
-
-- retrain the frozen configuration on all 1,000 development complexes;
-- evaluate exactly once on the 100 test complexes.
-
----
-
-## 2. Leakage and sampling requirements
-
-Even though this is a pilot, it must rehearse the full study’s leakage controls.
-
-### 2.1 Required grouping fields
-
-Every record should carry, when available:
-
-- protein exact-sequence hash;
-- protein P90/P40/P30 cluster IDs;
-- RNA exact-sequence hash;
-- RNA R90/R80 cluster IDs;
-- Rfam family/clan;
-- PDB/assembly/mother-sample identifier;
-- structure release date;
-- biological source/type;
-- interface fingerprint or at minimum a contact-map hash.
-
-### 2.2 Test-set construction
-
-The final 100 should be selected before training and should preferentially satisfy bilateral novelty:
-
-- no protein P30 cluster overlap with complex development data;
-- no RNA Rfam family overlap where family labels are available;
-- no exact protein or RNA sequence overlap;
-- all conformers/mutation-series/near-duplicate assemblies stay in one split;
-- test is experimental structure only.
-
-For the tiny pilot, if strict bilateral isolation cannot produce 100 samples, **do not silently relax criteria**. Write the relaxation to `artifacts/data_audit/split_relaxations.json` and report the exact number satisfying each strict criterion.
-
-### 2.3 Single-molecule pretraining leakage audit
-
-The protein/RNA 1,000 pools should be sampled after the complex test set is frozen. A strict mode removes test-neighbour protein/RNA structures from prior pretraining. A pragmatic mode may retain broad pretraining but must report nearest-neighbour overlap. Main pilot conclusions about cross-molecular generalization should use strict mode whenever feasible.
-
----
-
-## 3. Baseline A — ProteinMPNN on 1,000 proteins
-
-Upstream: `https://github.com/dauparas/ProteinMPNN`
-
-The repository does not copy or silently modify ProteinMPNN. `third_party/proteinmpnn/README.md` records the pinned upstream commit and exact commands.
-
-Required workflow:
-
-1. convert the frozen protein manifest to upstream ProteinMPNN training format;
-2. train from random initialization using only the 900 protein-train structures;
-3. choose checkpoint only on the 100 protein-validation structures;
-4. optionally refit on all 1,000 with the frozen configuration;
-5. export a standardized prediction file understood by our evaluator.
-
-Required metrics:
-
-- token NLL;
-- perplexity;
-- sequence recovery;
-- confidence/calibration;
-- recovery by length bin;
-- recovery by structural environment when annotations are available;
-- coordinate-noise robustness at 0, 0.05, 0.10 and 0.20 Å.
-
-This baseline answers only: **can a small protein-only fixed-backbone model learn a useful structural prior from 1,000 proteins?**
-
----
-
-## 4. Baseline B — MPNN-fixbb / NA-MPNN on 1,000 RNAs
-
-Upstream: `https://github.com/baker-laboratory/NA-MPNN`
-
-The OpenKnot literature uses “MPNN-fixbb” for fixed-backbone MPNN RNA designs; the public NA-MPNN repository is the reproducible upstream implementation used by this pilot wrapper.
-
-Required workflow mirrors ProteinMPNN:
-
-1. freeze 900/100 RNA train/validation;
-2. convert structures to upstream format;
-3. train from random initialization;
-4. checkpoint on RNA validation only;
-5. export standardized logits/predictions when technically available.
-
-Required RNA metrics:
-
-- 4-class token NLL;
-- normalized NLL (`NLL/log(4)`);
-- sequence recovery;
-- recovery by paired/unpaired status if geometry-derived annotations exist;
-- recovery by RNA length bin;
-- nucleotide composition drift;
-- coordinate-noise robustness;
-- leakage audit demonstrating that the DM-ICF RNA input view itself cannot directly read native A/U/G/C identity.
-
----
-
-## 5. DM-ICF model to implement in the pilot
-
-Core hypothesis:
-
-`sequence preference = intramolecular structural prior + local cross-molecular selection`
-
-### 5.1 Protein prior
-
-`hP = E_P(B_P)`
-
-`zP_struct = W_P hP + b_P`
-
-Input is sequence-neutral N/CA/C/O geometry plus virtual CB and geometric graph features.
-
-### 5.2 RNA prior
-
-`hR = E_R(B_R)`
-
-`zR_struct = W_R hR + b_R`
-
-Input is sequence-neutral sugar–phosphate geometry only. Native base atoms that leak A/U/G/C are prohibited.
-
-### 5.3 Rich PR edge representation
-
-For each PR edge `(i,j)`:
-
-`q_ij = G_PR(Pi_P hP_i, Pi_R hR_j, f_e(e_ij))`
-
-`e_ij` must include more than one reference distance. The first implementation should expose:
-
-- multi-atom protein-backbone to RNA sugar/phosphate RBF distances;
-- displacement in protein local frame;
-- displacement in RNA local frame;
-- relative frame rotation;
-- chain/type masks;
-- missing-atom masks.
-
-A distance-only ablation must be supported through config.
-
-### 5.4 Global compatibility matrix C
-
-`C ∈ R^(20×4)`
-
-Final decision for this project:
-
-- **small random zero-centred initialization**;
-- never initialize from empirical frequencies or PMI;
-- double-center/gauge-fix C for interpretability;
-- learn C first while both structural priors are frozen;
-- empirical PMI is post-hoc validation only.
-
-### 5.5 Contextual residual
-
-`DeltaC_ij = W_delta q_ij + b_delta`, shape `20×4`.
-
-Rules:
-
-- final projection zero-initialized;
-- no explicit Frobenius penalty forcing `DeltaC` to be small;
-- ordinary network weight decay is allowed;
-- double-centering is applied for identifiability.
-
-### 5.6 Relational relevance alpha
-
-`score_ij = -d_eff_ij/tau + DeltaScore_ij`
-
-`DeltaScore_ij = W_alpha q_ij + b_alpha`
-
-- `DeltaScore` final projection zero-initialized;
-- alpha is normalized separately for Protein←RNA and RNA←Protein neighbourhoods;
-- alpha reads geometry/structural hidden states but not partner token identity directly;
-- a weak early entropy regularizer may be used and must anneal to zero.
-
-### 5.7 Final logits
-
-Protein direction:
-
-`Delta zP_i(a) = lambda_P * sum_j alpha_ij * [C(a,b_j)+DeltaC_ij(a,b_j)]`
-
-`zP_i = zP_struct_i + Delta zP_i`
-
-RNA direction is symmetric.
-
-If a partner token is unknown during joint decoding, that edge contributes zero interaction correction until the partner token becomes known.
-
----
-
-## 6. DM-ICF staged training — none may be skipped
-
-The pilot must run all stages even if each stage is intentionally short.
-
-### Stage P — protein prior
-
-Data: protein train 900.
-
-Train: protein encoder/head only.
-
-Validation: protein val 100.
-
-### Stage R — RNA prior
-
-Data: RNA train 900.
-
-Train: RNA encoder/head only.
-
-Validation: RNA val 100.
-
-### Stage C — global compatibility
-
-Data: complex train 900 only.
-
-Freeze: both prior encoders and prior heads.
-
-Train: C and only explicitly configured scalar interface gains.
-
-Tasks sampled 1:1:
-
-- RNA known → predict masked protein interface positions;
-- protein known → predict masked RNA interface positions.
-
-No partner-scramble training loss. Scramble is evaluation-only.
-
-### Stage Delta — contextual residual
-
-Freeze: priors and C.
-
-Train: PR geometry encoder + DeltaC head.
-
-DeltaC output begins at exactly zero.
-
-### Stage Alpha — relational relevance
-
-Freeze: priors and C.
-
-Train: PR geometry encoder + DeltaC + alpha head.
-
-Use distance-prior initialization, weak temporary entropy regularization, 5% PR edge dropout and configurable 10–20% partner-token dropout.
-
-### Stage Joint — final coordination
-
-Tasks:
-
-- protein conditional;
-- RNA conditional;
-- joint masked design.
-
-Task schedule:
-
-- start 2:2:1;
-- finish 1:1:1.
-
-Gradual unfreezing:
-
-- heads/interactions first;
-- top prior layers next;
-- lower prior layers last;
-- discriminative LR / layer-wise LR decay.
-
-C may be unfrozen only at a very small learning rate.
-
----
-
-## 7. Loss implementation — strict requirements
-
-This is a critical implementation area. The code must fail loudly if group normalization is accidentally replaced with a raw token sum.
-
-Raw groups per sample:
-
-- protein interface `P,I`;
-- protein non-interface `P,N`;
-- RNA interface `R,I`;
-- RNA non-interface `R,N`.
-
-Within each non-empty group: mean CE over tokens.
-
-When combining protein and RNA, normalize alphabet scales:
-
-- protein: `CE/log(20)`;
-- RNA: `CE/log(4)`.
-
-For a joint sample with all four groups available:
-
-`L_joint = 0.25*(L_PI + L_PN + L_RI + L_RN)`.
-
-If a group is empty, renormalize over the remaining valid groups.
-
-A minibatch contains one task type; task balance is controlled by the sampler, not by summing three giant losses.
-
-Predicted structures are outside this initial pilot and must not silently enter these manifests.
-
-The training logger must record:
-
-- each raw group NLL;
-- each normalized group NLL;
-- total loss;
-- regularizer contributions separately;
-- gradient norms by major module;
-- task-gradient cosine similarities during joint coordination.
-
-PCGrad is **off by default**. It may only be activated in an explicit ablation after sustained gradient conflicts are demonstrated.
-
----
-
-## 8. Required augmentation
-
-Configurable and logged:
-
-- coordinate Gaussian noise: main `sigma=0.10 Å`;
-- ablations: 0, 0.05, 0.10, 0.20 Å;
-- random + local/spatial patch masking;
-- variable mask fraction covering approximately 10–100%;
-- light mask curriculum;
-- 5% spatial edge dropout;
-- 5% PR edge dropout after PR learning starts;
-- structural-prior label smoothing 0.05;
-- no label smoothing in global C stage.
-
----
-
-## 9. Joint inference and SPIR
-
-Initial joint decoding uses a mixed random order over protein and RNA designable positions.
-
-After both sequences are complete, run **Single-Pass Interface Reconciliation (SPIR)**:
-
-1. freeze all non-interface positions;
-2. estimate interface uncertainty using entropy or top1–top2 margin;
-3. reopen only the least-confident 20–40% interface positions;
-4. update protein conditioned on complete RNA, then RNA conditioned on updated protein;
-5. reverse the direction for half the generated candidates;
-6. use lower temperature, default search range 0.3–0.7;
-7. execute only one cycle in the default model.
-
-Required ablation: no SPIR vs one-pass SPIR vs repeated refinement.
-
----
-
-## 10. Final 100-complex evaluation — mandatory battery
-
-Every metric must be paired by target whenever possible. Report mean/median, per-target distributions and uncertainty intervals; never report only a global pooled number.
-
-### 10.1 Core sequence prediction
-
-For each method/mode where applicable:
-
-- protein NLL;
-- protein normalized NLL;
-- protein recovery;
-- RNA NLL;
-- RNA normalized NLL;
-- RNA recovery;
-- interface and non-interface separately;
-- per-complex macro averages;
-- per-token micro averages (secondary, clearly labelled).
-
-### 10.2 Conditional design tests
-
-RNA→Protein:
-
-- DM-ICF vs protein structural prior;
-- DM-ICF vs ProteinMPNN where the input definitions are fair;
-- interface-specific gains.
-
-Protein→RNA:
-
-- DM-ICF vs RNA structural prior;
-- DM-ICF vs MPNN-fixbb/NA-MPNN where fair.
-
-### 10.3 Partner-scramble test
-
-For each native complex:
-
-- preserve backbones;
-- scramble partner sequence using composition-preserving and family-matched variants when possible;
-- recompute target NLL.
-
-Report:
-
-`DeltaNLL = NLL_scrambled - NLL_native`
-
-separately for interface/non-interface and both directions.
-
-A genuine partner-aware model should show a much larger effect at the interface.
-
-### 10.4 Local counterfactual partner mutation
-
-For contacting partner tokens, substitute each alternative identity while keeping geometry fixed.
-
-Measure:
-
-- KL divergence of target-token distribution before/after mutation;
-- KL vs spatial distance;
-- contact vs far-control effect;
-- directional symmetry (RNA→Protein and Protein→RNA).
-
-### 10.5 C vs empirical PMI
-
-PMI is computed **after training** from an experimental structure set and never used for initialization.
-
-Report:
-
-- learned C heatmap;
-- empirical PMI heatmap;
-- Pearson correlation;
-- Spearman correlation;
-- bootstrap CI;
-- seed-to-seed C stability;
-- shuffled-pair null distribution.
-
-Where data permit, stratify empirical enrichment by base/sugar/phosphate-facing geometry.
-
-### 10.6 DeltaC analysis
-
-Report:
-
-- `||DeltaC_ij||_F / ||C||_F` distribution;
-- relation to geometry/contact class;
-- examples where contextual correction reverses global preference;
-- seed stability;
-- effect of replacing rich geometry with distance-only geometry.
-
-### 10.7 Alpha analysis
-
-Report:
-
-- entropy and effective neighbour count `exp(H(alpha))`;
-- relation between alpha and distance;
-- cases where learned relevance prefers a non-nearest neighbour;
-- edge-dropout robustness;
-- alpha maps for representative interfaces.
-
-Alpha is a learned relevance coefficient, not causal physical importance.
-
-### 10.8 Robustness
-
-Re-evaluate with coordinate perturbations at 0, 0.05, 0.10, 0.20 and optionally 0.30 Å.
-
-Additional stress tests:
-
-- remove 5/10/20% PR edges;
-- hide 10/20/40% known partner tokens in conditional mode;
-- perturb decoding order;
-- change candidate generation temperature;
-- missing-atom masks where supported.
-
-### 10.9 Joint decoding stability
-
-For each complex generate multiple candidates and orders.
-
-Measure:
-
-- recovery/NLL distribution across orders;
-- pairwise sequence identity across generated candidates;
-- order-sensitivity variance;
-- protein-first vs RNA-first directional bias;
-- SPIR improvement and diversity retention.
-
-### 10.10 Calibration
-
-For both alphabets:
-
-- expected calibration error;
-- Brier score;
-- reliability bins;
-- confidence vs correctness at interface and non-interface separately.
-
-### 10.11 Sequence diversity / collapse audit
-
-Measure:
-
-- amino-acid composition;
-- RNA composition;
-- protein net-charge proxy;
-- generated pairwise sequence identity;
-- entropy per position;
-- fraction of near-duplicate candidates;
-- enrichment of Lys/Arg at interfaces;
-- comparison to native composition.
-
-### 10.12 Ablation ladder
-
-At minimum:
-
-A. scratch joint model, no prior pretraining;
-
-B. + protein/RNA structural priors;
-
-C. + global C;
-
-D. + contextual DeltaC;
-
-E. + learned alpha = full DM-ICF before final joint coordination;
-
-F. + final joint coordination;
-
-G. + SPIR.
-
-Additional ablations:
-
-- random C init vs zero C init;
-- rich PR geometry vs distance only;
-- no coordinate noise;
-- no edge dropout;
-- no partner-token dropout;
-- no gradual unfreezing;
-- fixed-distance alpha vs learned alpha;
-- no double-centering;
-- repeated refinement vs SPIR.
-
-### 10.13 Data-efficiency pilot inside the 1,000 complexes
-
-Train fixed configurations on nested subsets of complex train:
-
-- 10%;
-- 25%;
-- 50%;
-- 100%.
-
-Compare scratch vs dual-prior initialization. This is the direct pilot test of whether single-molecule structural priors reduce complex-data requirements.
-
-### 10.14 Optional external structure-consistency evaluation
-
-This repository provides adapters/config contracts for Boltz/AlphaFold3/other independent predictors, but external predictors are not required for unit tests and are never used as ground-truth training labels in this pilot.
-
-When run, report protein backbone agreement, RNA backbone agreement, interface geometry/contact recovery and predictor confidence separately. Do not collapse them into a fake “binding energy”.
-
----
-
-## 11. Statistical analysis on the held-out 100
-
-Required defaults:
-
-- paired bootstrap over complexes, not residues, 10,000 resamples;
-- paired permutation or Wilcoxon signed-rank as a secondary non-parametric test when appropriate;
-- effect sizes and confidence intervals, not p-values alone;
-- Holm correction for the small pre-registered primary comparison family;
-- Benjamini–Hochberg for exploratory metric families;
-- seed variation reported separately from target variation.
-
-Primary pre-registered comparisons:
-
-1. full DM-ICF vs structural-prior-only at protein interface NLL;
-2. full DM-ICF vs structural-prior-only at RNA interface NLL;
-3. full DM-ICF partner-scramble DeltaNLL at interface vs non-interface;
-4. contextual DeltaC model vs global-C model;
-5. SPIR vs no-SPIR joint interface NLL/recovery.
-
-No test-set metric may be used to decide whether a model component remains in the final model.
-
----
-
-## 12. Reproducibility artifacts
-
-Every run must persist:
-
-- git commit;
-- full resolved config;
-- random seeds;
-- exact manifest checksums;
-- upstream baseline commit SHAs;
-- environment lock information;
-- hostname/GPU/PyTorch/CUDA versions;
-- epoch/step logs;
-- selected checkpoint reason;
-- test-run command;
-- prediction files;
-- metric JSON/CSV;
-- statistical-analysis outputs.
-
-Expected top-level artifacts:
+This pilot is a small but complete rehearsal of fixed-backbone Protein/RNA inverse folding and Protein–RNA co-design. It is designed to falsify the central hypothesis before the full data programme is launched:
 
 ```text
-artifacts/
-  manifests/
-  data_audit/
-  checkpoints/
-  logs/
-  predictions/
-  metrics/
-  statistics/
-  figures/
-  interpretability/
-  external_structure/
+sequence preference
+= intramolecular structural prior
++ local cross-molecular selection
 ```
 
----
+The cross-molecular selection field is:
 
-## 13. Hard failure conditions
+```text
+Gamma_ij = alpha_ij (C + DeltaC_ij)
+```
 
-The pipeline must stop, not warn-and-continue, when:
+The pilot must exercise the complete data, training, inference, control and statistical pipeline. A partially run model demo is not a completed pilot.
 
-- a test complex appears in any training manifest;
-- an exact protein/RNA test sequence appears in a supposedly strict development manifest;
-- native RNA base identity can be inferred because prohibited base atoms entered the DM-ICF RNA input view;
-- a loss group is empty and the code divides by zero instead of renormalizing;
-- a non-finite loss/gradient occurs;
-- C/DeltaC/alpha tensor shapes deviate from contract;
-- baseline and DM-ICF manifests differ when the experiment claims a fair comparison;
-- a checkpoint is selected using final test metrics;
-- predicted structures silently enter the experimental-only pilot.
+## 1. Frozen scale
 
----
+### Protein structural-prior pool
 
-## 14. Definition of “pilot complete”
+Exactly 1,000 experimental Protein structures:
 
-The pilot is complete only when all of the following exist:
+```text
+900 development train
+100 P30-component-disjoint validation
+```
 
-1. frozen manifests and leakage report;
-2. trained ProteinMPNN baseline;
-3. trained MPNN-fixbb/NA-MPNN RNA baseline;
-4. DM-ICF checkpoints for P, R, C, Delta, Alpha and Joint stages;
-5. joint sampler + SPIR outputs;
-6. all mandatory ablations or explicit machine-readable `NOT_RUN` records with reason;
-7. full 100-complex metric table;
-8. paired statistical report;
-9. C/PMI, DeltaC and alpha interpretability outputs;
-10. robustness and decoding-order reports;
-11. exact reproduction commands in `RUNBOOK.md`.
+ProteinMPNN and our Protein prior receive identical frozen IDs. Native side-chain identity is never a structural-prior feature in our model.
 
-A partially trained model is **not** a completed pilot.
+### RNA structural-prior pool
+
+Exactly 1,000 experimental RNA structural views:
+
+```text
+900 development train
+100 validation disjoint under R80 OR Rfam connected components
+```
+
+NA-MPNN and our RNA prior receive identical frozen IDs. Our RNA structural view exposes sugar/phosphate geometry but no base-ring identity atoms.
+
+Standalone RNA is preferred. RNA chains extracted from other screened experimental Protein–RNA complexes are allowed with the Protein partner removed, but an extracted view sourced from any of the frozen 1,100 downstream complexes is excluded.
+
+### Protein–RNA complex pool
+
+Exactly 1,100 eligible experimental complexes after screening:
+
+```text
+1000 development
+  900 train
+  100 strict bilateral validation
+100 immutable final holdout
+```
+
+Complex components are linked by any shared Protein P30, RNA R80 or Rfam family. Final 100 are frozen before the two prior pools are sampled.
+
+## 2. Non-negotiable leakage controls
+
+Final test must have no development overlap by:
+
+- exact Protein sequence;
+- exact RNA sequence;
+- mother sample;
+- any constituent Protein P30;
+- any constituent RNA R80;
+- any constituent Rfam family.
+
+The two prior pools are then purged against final-test exact sequence/family neighbours.
+
+RNA complex-chain fallback views sourced from the entire frozen 1,100 downstream complex pool are additionally removed, preventing exact downstream RNA-backbone pre-exposure.
+
+If strict component sizes make exactly 100 final complexes impossible, enlarge the eligible candidate universe or create a new explicitly relaxed pilot version. Never split a homologous component silently.
+
+## 3. Structural screening
+
+Primary limits:
+
+```text
+Protein single prior       30..1000 residues
+RNA single prior            5..500 nt
+complex Protein            30..1000 residues
+complex RNA                 5..500 nt
+complex total              <=1000 tokens
+resolution                 <=4.0 A when applicable
+```
+
+NMR without a conventional resolution is allowed and recorded as a distinct method stratum.
+
+Ribosome/spliceosome-like assemblies are excluded from the primary pilot. Complex samples must show real Protein–RNA heavy-atom contact and at least three contact pairs under the 6-A screening definition.
+
+## 4. Two interface concepts
+
+### Canonical supervised/reporting interface
+
+- full heavy-atom Protein/RNA contact;
+- 6 A;
+- computed on clean, unaugmented experimental coordinates;
+- used for PI/RI loss groups, interface recovery/NLL, baseline position labels and confirmatory endpoints.
+
+### DM-ICF PR message graph
+
+- sequence-neutral Protein N/CA/C/O/virtual-CB against RNA sugar/phosphate geometry;
+- default 8-A cutoff;
+- max 12 neighbours per side, unioned;
+- used as the cross-molecular receptive field.
+
+The PR graph must never redefine the reported interface. Conversely, SPIR/design-time position selection must use the sequence-neutral PR graph and not native side-chain/base contact labels.
+
+## 5. Official one-sided references
+
+### ProteinMPNN
+
+Pinned official `dauparas/ProteinMPNN` commit from `third_party/LOCK.json`.
+
+Protocol per seed:
+
+1. exact 900/100 frozen Protein development split;
+2. random-initialized upstream training;
+3. select epoch using Protein validation only;
+4. restart from random initialization;
+5. train on all 1,000 Protein structures for the selected development epoch count;
+6. final one-sided evaluation uses Protein backbone only.
+
+### NA-MPNN / MPNN-fixbb RNA reference
+
+Pinned official `baker-laboratory/NA-MPNN` commit.
+
+Same 900/100 -> selected epoch/pass -> full-1,000 refit logic. Final one-sided RNA evaluation sees RNA only.
+
+Standardized project probability order is `AUGC`. Under NA-MPNN shared tokens, columns map `AUGC = DA,DT,DG,DC`.
+
+These baselines answer how strong standard one-sided structural design is on the same frozen polymer pools. They do not receive partner identity and are not the sole controls for cross-partner coupling.
+
+## 6. DM-ICF model
+
+Protein and RNA encoders are independent and sequence-neutral. Their hidden dimensions are aligned for interaction projection.
+
+For each PR edge:
+
+```text
+q_ij = G_PR(Pi_P hP_i + Pi_R hR_j + f_e(e_ij))
+```
+
+Primary rich `e_ij` contains 5×12 atom-pair RBF distances, explicit missing masks, two local-frame displacements and relative local-frame rotation.
+
+Global compatibility:
+
+```text
+C in R^(20x4)
+```
+
+- small random zero-centred initialization;
+- no empirical frequency/PMI initialization;
+- only global scalar centering during forward;
+- row/column main effects retained;
+- double-centering reserved for post-hoc interaction-only views.
+
+Context residual:
+
+```text
+DeltaC_ij in R^(20x4)
+```
+
+- generated from q_ij;
+- exact zero-initialized output head;
+- no explicit magnitude penalty in the primary pilot.
+
+Relevance:
+
+```text
+score_ij = -d_eff/tau + DeltaScore_ij
+alpha = neighbourhood_softmax(score)
+```
+
+The learned score residual starts at zero. Protein←RNA and RNA←Protein normalize separately.
+
+Final directional correction uses known partner tokens. An unknown partner contributes zero until it becomes known in sequential joint decoding.
+
+## 7. Mandatory staged training
+
+### P — Protein prior
+
+Train Protein encoder/context decoder/head on the 900 Protein development train set. Select on P30-disjoint validation normalized NLL.
+
+### R — RNA prior
+
+Train RNA encoder/context decoder/head. Select on R80/Rfam-disjoint validation normalized NLL.
+
+### C — global compatibility
+
+Complex train only.
+
+Trainable:
+
+```text
+C only
+```
+
+Frozen/disabled:
+
+```text
+Protein/RNA priors
+DeltaC
+learned alpha residual
+lambda_P = lambda_R = 1
+```
+
+Bidirectional conditional interface prediction supervises the same C. No empirical PMI is supplied.
+
+### DeltaC — contextual compatibility
+
+Trainable:
+
+```text
+G_PR + DeltaC head
+```
+
+Frozen: priors, C, learned-alpha residual, lambdas.
+
+### Alpha — relation relevance
+
+Trainable:
+
+```text
+alpha relevance head + tau only
+```
+
+Frozen: priors, C, G_PR and DeltaC. This stage isolates “which neighbour matters?” from “what compatibility matrix is present?”.
+
+### Joint — final coordination
+
+C remains frozen as the Stage-C anchor. Context field, bounded lambdas, token-context heads and progressively released pretrained encoder blocks may adapt.
+
+Task curriculum begins approximately 2:2:1 Protein-conditional : RNA-conditional : joint and transitions to 1:1:1.
+
+Scratch-joint control differs deliberately: all random-initialized encoder layers are trainable from step zero.
+
+## 8. Loss
+
+Per-sample semantic groups:
+
+```text
+PI PN RI RN
+```
+
+Each non-empty group is a mean CE. Protein groups divide by `log(20)` and RNA groups by `log(4)` before cross-polymer combination. Interface/non-interface groups are balanced within a polymer; Protein/RNA receive equal weight in the joint task.
+
+The pilot is not additionally per-chain balanced. This must not be misreported as a chain-balanced loss.
+
+## 9. Augmentation
+
+Primary training uses:
+
+- coordinate Gaussian noise `sigma=0.10 A`;
+- variable masking about 10–100%;
+- explicit full-mask probability;
+- random plus local/spatial patch corruption;
+- wrong-token corruption;
+- interface-upweighted corruption;
+- 5% intra-edge dropout;
+- 5% PR-edge dropout in contextual stages;
+- light DropPath;
+- 0.05 label smoothing for structural priors, none for Stage C.
+
+Canonical interface labels are computed from the clean structure and cannot change due to coordinate augmentation.
+
+## 10. Checkpoint selection and final refit
+
+Joint checkpoint selection combines:
+
+```text
+Protein conditional canonical-interface normalized NLL
+RNA conditional canonical-interface normalized NLL
+sequential teacher-forced joint normalized pseudo-NLL
+```
+
+The sequential metric uses fixed mixed, Protein-first and RNA-first orders on a deterministic validation subset. Each target is scored while unknown, then its native token is revealed to subsequent positions.
+
+A development best epoch K is a **prefix of the original schedule horizon H**. Full-1,000 refit restarts from scratch and replays epochs 1..K under the same H-based curriculum/cosine/unfreezing schedule. It must not compress a complete H-epoch schedule into K epochs.
+
+Only full-1,000 refit checkpoints support the primary final report.
+
+## 11. Joint inference and SPIR
+
+Primary joint generation uses mixed Protein/RNA autoregressive order. Protein-first and RNA-first are order controls.
+
+When partner tokens become available, their DM-ICF contribution becomes available immediately.
+
+SPIR is a single low-temperature interface reconciliation pass. Reopen-eligible positions are selected from the sequence-neutral PR graph, ranked by current model uncertainty. Repeated SPIR is an ablation, not the primary method.
+
+Primary generation budget: 64 candidates/complex. Heavy order/SPIR ablation cells: 16 candidates/complex unless changed before final-test opening.
+
+## 12. Internal fairness controls
+
+Required same-data controls:
+
+- scratch joint;
+- dual structural priors only;
+- + global C;
+- + DeltaC;
+- + alpha;
+- full joint;
+- partner-blind;
+- geometry-only capacity control;
+- C backbone-context control;
+- fixed empirical-PMI reference.
+
+The component ladder must use compatible data IDs/seeds and the same development-selection/full-refit discipline.
+
+## 13. Final 100 battery
+
+Every primary seed receives the inexpensive core final evaluation. The predeclared `analysis_seed` receives heavyweight mechanistic/generative analyses.
+
+Core/secondary analyses include:
+
+- Protein/RNA conditional NLL/recovery;
+- canonical interface/non-interface decomposition;
+- sequential joint metrics;
+- partner scrambling;
+- partner counterfactual mutation and local KL response;
+- independent heavy-atom C-vs-PMI comparison;
+- DeltaC context/magnitude and mean-drift audit;
+- alpha entropy/effective-neighbour/top-edge removal;
+- coordinate noise, PR edge removal and partner hiding;
+- order sensitivity;
+- SPIR ablation;
+- calibration and candidate diversity;
+- 10/25/50/100% **nested** complex-data efficiency;
+- strict OOD covariate-shift report.
+
+## 14. Confirmatory statistics
+
+`configs/hypotheses.yaml` is frozen before final-test metrics are inspected.
+
+Primary Holm family contains only the predeclared H1–H4/H2 subtests there. Other analyses are secondary/exploratory.
+
+Statistical unit is the biological complex. Seeds and residues are not treated as independent test samples.
+
+For in-silico scrambling/mutation/edge-removal, conclusions are phrased as **model-interventional sensitivity**, not biological causality.
+
+## 15. Interpretation
+
+C and C+DeltaC are learned conditional sequence-compatibility contributions, not thermodynamic binding energies.
+
+Because DeltaC can develop a non-zero population mean even with C frozen, report the Stage-C anchor C, mean DeltaC, alpha-weighted mean DeltaC and an effective `C_eff` when appropriate.
+
+Empirical PMI is computed after training from independent full-heavy-atom experimental contacts; it never initializes the primary C.
+
+## 16. Explicitly deferred from the primary pilot
+
+- predicted-structure augmentation;
+- family-aware replacement sampling;
+- dynamic token packing;
+- automatic PCGrad;
+- enumeration of alternative biological assemblies;
+- a new per-chain-balanced objective.
+
+These are full-scale follow-up questions, not missing requirements for the controlled mini-pilot.

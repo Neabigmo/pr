@@ -1,55 +1,44 @@
-# Mini-pilot data pipeline: download -> screen -> annotate -> freeze -> audit
+# Mini-pilot data pipeline — audited v3
 
-This document is the **only supported ordering** for constructing the 1,000 protein / 1,000 RNA / 1,100 Protein-RNA pilot. Do not hand-pick IDs after looking at model results.
+This is the only supported order for constructing the 1,000 Protein / 1,000 RNA / 1,100 Protein–RNA pilot. IDs are frozen before model results exist; rejected samples are never silently replaced after looking at performance.
 
 ## 0. External requirements
 
-Python dependencies are installed with the project. Two external sequence-analysis programs are also required before the `annotate` step:
+Required before annotation:
 
-- **MMseqs2**: joint P90/P40/P30 and RNA R90/R80 clustering.
-- **Infernal** (`cmscan`, `cmpress`): Rfam family annotation.
+- MMseqs2;
+- Infernal (`cmscan`, `cmpress`);
+- official Rfam CM/clan files downloaded by the project.
 
-Record their versions:
+Archive versions:
 
 ```bash
+mkdir -p artifacts
 mmseqs version > artifacts/software_versions.txt
 cmscan -h | head -n 3 >> artifacts/software_versions.txt
 python --version >> artifacts/software_versions.txt
 ```
 
-The pipeline fails if these programs are unavailable; it never substitutes an unrecorded approximate clustering method.
-
----
-
-## 1. Discover RCSB candidates
-
-Discovery is deliberately broad. Scientific filtering happens from downloaded coordinates and every rejection is recorded.
+## 1. Broad RCSB discovery
 
 ```bash
 mkdir -p data/discovery
-
 pr-pilot discover-rcsb --kind protein --out data/discovery/protein.tsv
-pr-pilot discover-rcsb --kind rna     --out data/discovery/rna.tsv
+pr-pilot discover-rcsb --kind rna --out data/discovery/rna.tsv
 pr-pilot discover-rcsb --kind complex --out data/discovery/complex.tsv
 ```
 
-The exact RCSB query is written next to each TSV as `*.query.json`.
+Discovery is broad; scientific filtering occurs from coordinates and writes explicit rejection reasons.
 
-### Candidate definitions
+Candidate intent:
 
-- Protein candidates: experimental entries with protein and no RNA/DNA.
-- Standalone RNA candidates: experimental RNA entries with no protein/DNA.
-- Complex candidates: experimental entries containing both protein and RNA and no DNA.
+- Protein: experimental Protein entries without RNA/DNA;
+- standalone RNA: experimental RNA entries without Protein/DNA;
+- complex: experimental entries containing Protein + RNA and no DNA.
 
-RNA structural-prior data are later augmented by **RNA-chain views extracted from screened experimental Protein-RNA complexes**. This is preferred over weakening structural QC if standalone RNA alone is insufficient.
+## 2. Download oversized deterministic pools
 
----
-
-## 2. Download a deliberately oversized candidate pool
-
-Do **not** download exactly 1,000/1,000/1,100 structures. QC, clustering and strict-test purge will remove many entries. Start with a much larger deterministic prefix and enlarge it if the eligible pool remains too small.
-
-Example pilot starting point:
+Do not download exactly the target counts. QC, family grouping and test-family purge remove many candidates.
 
 ```bash
 mkdir -p data/raw/{protein,rna,complex}
@@ -67,11 +56,9 @@ pr-pilot download-rcsb --kind complex \
   --out data/raw/complex --seed 20261107 --max-candidates 6000
 ```
 
-Protein/RNA single-molecule views use deposited entry coordinates. Complexes use RCSB biological assembly 1. Download records contain URL, local path, SHA256 and byte count; failed downloads are written separately and are never silently replaced.
+Single-polymer views use deposited coordinates. Complexes use biological assembly 1 in this pilot. Every successful file gets URL/path/SHA256/byte count; failures are archived.
 
-If screening produces fewer eligible candidates than required after strict-test purge, increase `--max-candidates`; do not relax biology/QC behind the scenes.
-
----
+If too few samples survive, enlarge the download universe. Do not weaken QC behind the scenes.
 
 ## 3. Coordinate-level screening
 
@@ -91,43 +78,53 @@ pr-pilot screen --kind complex --config configs/pilot.yaml \
   --out data/screened/complex
 ```
 
-### Hard filters in the primary pilot
+### Primary hard filters
 
-**All data**
-- experimental structure only;
-- no DNA / nucleic-acid hybrid target;
-- unsupported target-polymer modifications are rejected rather than guessed;
-- standard/CCD-modified residues that map unambiguously to canonical protein/RNA tokens use one shared vocabulary in screening, DM-ICF and both official baselines;
-- resolution <= 4.0 A when a resolution applies; NMR without a conventional resolution is allowed and recorded separately.
+All data:
 
-**Protein prior**
-- length 30--1,000;
-- complete N/CA/C/O for selected chain;
-- no RNA partner in the protein-only candidate view.
+- experimental only;
+- no DNA/hybrid target;
+- canonicalizable target residues only;
+- resolution <= 4.0 A where applicable; NMR allowed and recorded separately;
+- shared canonical residue vocabulary across screening, DM-ICF and baseline converters.
 
-**Standalone RNA prior**
-- length 5--500;
-- sequence restricted to canonical A/U/G/C after legitimate CCD parent mapping;
-- stable C1'/C3'/C4' sugar frame;
-- no protein partner in the standalone view.
+Protein prior:
 
-**Protein-RNA complex**
-- biological assembly view;
-- actual heavy-atom Protein-RNA contact required, not metadata alone;
-- at least 3 contacting residue-nucleotide pairs at the 6 A screening contact threshold;
-- only Protein/RNA chains participating in the contact graph are retained as the mother sample;
-- total selected Protein + RNA tokens <= 1,000;
+- 30–1,000 residues;
+- required backbone atoms;
+- no RNA partner in the selected view.
+
+Standalone RNA prior:
+
+- 5–500 nucleotides;
+- canonical A/U/G/C after legitimate parent mapping;
+- valid C1'/C3'/C4' sugar frame;
+- no Protein partner in the standalone view.
+
+Protein–RNA complex:
+
+- biological assembly 1;
+- real full-heavy-atom Protein–RNA contact required;
+- at least 3 contacting residue/nucleotide pairs at the 6-A screening threshold;
+- only contact-connected Protein/RNA chains retained as the mother sample;
+- 30 <= total selected Protein residues <= 1,000;
+- 5 <= total selected RNA nucleotides <= 500;
+- Protein + RNA <= 1,000 tokens;
 - interface backbone missing-atom fraction <= 10%;
-- ribosome/spliceosome keyword filter plus the total-size limit;
-- all selected chains must have the reference atoms required by the runtime adapter.
+- ribosome/spliceosome keyword exclusion plus size control;
+- reference atoms required by runtime present.
 
-Every rejection is written to `*_rejected.tsv` with an explicit reason. Never delete that file.
+Every rejection remains in `*_rejected.tsv`.
 
----
+### Important interface distinction
 
-## 4. Build the RNA structural-prior candidate pool
+The **canonical supervised/reporting interface** is full-heavy-atom contact at 6 A on clean coordinates. It is independent of DM-ICF's wider/capped PR message graph. Training coordinate noise cannot change this label.
 
-The paper design allows RNA chains extracted from experimental complexes with the partner removed. This is especially important because 1,000 high-quality standalone RNA-only PDB entries may not remain after strict QC and test-family purge.
+SPIR/design-time interface selection uses only the sequence-neutral PR graph, not native side-chain/base contact labels.
+
+## 4. Build RNA structural-prior candidate views
+
+High-quality standalone RNA alone may be insufficient after strict filtering. The paper design therefore allows RNA chains extracted from other experimental Protein–RNA complexes with the Protein partner removed.
 
 ```bash
 python tools/build_rna_candidate_pool.py \
@@ -136,24 +133,20 @@ python tools/build_rna_candidate_pool.py \
   --out data/screened/rna_prior_candidates.tsv
 ```
 
-This produces two recorded `source_view` classes:
+Two `source_view` classes are recorded:
 
 1. `standalone_rna`;
 2. `protein_rna_complex_chain_extracted`.
 
-For class 2, the protein chain is never loaded by the RNA-prior dataloader. The exact source remains auditable through `source_complex_sample_id`.
+For class 2, Protein atoms are never loaded by the RNA-prior dataloader.
 
----
+Additional v3 protection: after the exact 1,100 downstream complex pool is frozen, any extracted RNA view whose `source_complex_sample_id` belongs to that frozen pool is purged. Thus the RNA prior cannot see an exact downstream RNA backbone from the reported 1,100 complexes.
 
-## 5. Download Rfam and jointly annotate all candidates
+## 5. Joint clustering and Rfam annotation
 
 ```bash
 pr-pilot download-rfam --out data/reference/rfam
-```
 
-Then jointly cluster **single-molecule candidates and complex chains in the same run**:
-
-```bash
 pr-pilot annotate \
   --proteins data/screened/protein/protein_eligible.tsv \
   --rnas data/screened/rna_prior_candidates.tsv \
@@ -164,25 +157,11 @@ pr-pilot annotate \
   --out data/annotated
 ```
 
-Why joint annotation is mandatory:
+Single-polymer candidates and complex chains are clustered in the **same MMseqs universe**. Otherwise P30/R80 labels from separate clustering runs are not comparable.
 
-- a P30 label generated in a separate clustering run is not directly comparable to another run;
-- the same applies to RNA R80;
-- final-test purge from structural-prior pools is only meaningful when labels share one clustering universe.
+Outputs include Protein P90/P40/P30, RNA R90/R80 and Rfam family labels. Multi-chain complexes retain every constituent label; any shared P30, any shared R80 or any shared Rfam connects samples during strict splitting.
 
-Generated hierarchy:
-
-- protein P90 / P40 / P30;
-- RNA R90 / R80;
-- Rfam family labels from `cmscan --cut_ga --rfam`.
-
-Multi-chain complexes retain all constituent cluster/family labels. The splitter treats **any** shared P30, **any** shared R80, or **any** shared Rfam as a link between samples.
-
----
-
-## 6. Freeze the test set FIRST, then the prior pools
-
-This ordering is non-negotiable.
+## 6. Freeze final test first
 
 ```bash
 rm -rf manifests/pilot_v1
@@ -195,23 +174,22 @@ pr-pilot freeze \
   --out manifests/pilot_v1
 ```
 
-The freeze operation performs:
+Order is non-negotiable:
 
-1. construct strict connected components under Protein P30 + RNA R80 + Rfam;
-2. choose exactly 100 **whole-component** experimental complexes for final test;
-3. remove every test-linked component from development candidates;
-4. deterministically sample 1,000 complex development samples;
-5. form strict 900/100 complex train/validation groups;
-6. purge final-test exact sequences, P30, R80 and Rfam from the protein/RNA prior candidate pools;
-7. only then sample 1,000 Protein and 1,000 RNA structural-prior structures;
-8. freeze 900/100 single-molecule train/validation manifests;
-9. write SHA256 metadata for every frozen manifest.
+1. build connected complex components under Protein P30 + RNA R80 + Rfam;
+2. choose exactly 100 whole-component experimental complexes for final test;
+3. remove those components from development candidates;
+4. sample 1,000 complex development samples;
+5. split complex dev into strict 900/100 bilateral-disjoint train/validation;
+6. purge final-test exact sequences/P30/R80/Rfam from Protein/RNA prior candidates;
+7. purge RNA extracted-chain views sourced from the frozen 1,100 complex pool;
+8. freeze 1,000 Protein prior structures with **P30-disjoint 900/100 validation**;
+9. freeze 1,000 RNA prior structures with **R80-or-Rfam-component-disjoint 900/100 validation**;
+10. write manifest SHA256 metadata.
 
-If an exact 100-sample strict component holdout is mathematically impossible, the program must fail. The response is to enlarge the eligible candidate universe or version an explicitly relaxed pilot; never split a homologous component silently.
+If exact component sizes make a strict 100 impossible, fail and enlarge the candidate universe. Never split a homologous component to make the count fit.
 
----
-
-## 7. Mandatory data audit before GPU training
+## 7. Mandatory data audit
 
 ```bash
 pr-pilot audit-data \
@@ -220,36 +198,31 @@ pr-pilot audit-data \
   --out artifacts/data_audit
 ```
 
-This audit must pass before any baseline or DM-ICF training starts.
+Hard assertions include:
 
-Minimum hard assertions:
-
-- exactly 1,000 Protein prior structures = 900 train + 100 validation;
-- exactly 1,000 RNA prior structures = 900 train + 100 validation;
-- exactly 1,100 complexes = 1,000 development + 100 immutable final test;
-- complex development = 900 train + 100 validation;
-- final test is experimental only;
-- no exact Protein/RNA sequence overlap between complex dev and test;
+- exact 1,000 Protein / 1,000 RNA / 1,100 complex counts;
+- final test = 100 experimental complexes;
+- no exact complex dev/test sequence overlap;
 - no mother-sample overlap;
-- no constituent P30 overlap;
-- no constituent R80 overlap;
-- no constituent Rfam overlap;
-- no final-test P30/R80/Rfam/exact sequence in either structural-prior pool.
+- no P30, R80 or Rfam overlap across complex dev/test;
+- no final-test exact/P30/R80/Rfam neighbour in either prior pool;
+- no P30 overlap across Protein prior train/validation;
+- no R80 or Rfam overlap across RNA prior train/validation.
 
-Also archive distributions for:
+Archive distributions for length, method/resolution, interface size/missingness, RNA source view, family sizes and complex source/type metadata when available. Strict OOD covariate shift is reported, not hidden.
 
-- Protein/RNA/total length;
-- resolution/method;
-- interface size and missing fraction;
-- RNA source view (standalone vs extracted complex chain);
-- P30/R80/Rfam family sizes;
-- complex type/source where annotations are available.
+## 8. Baseline preparation only after manifests are frozen
 
-Large train/test covariate shifts are reported, not hidden. The final 100 are intentionally strict OOD, so this pilot is **pseudo-random under bilateral novelty constraints**, not an IID random split.
+First verify pinned upstream contracts:
 
----
+```bash
+python tools/preflight_official_baselines.py \
+  --repo-root . \
+  --third-party-root third_party/checkouts \
+  --out artifacts/preflight/baselines.json
+```
 
-## 8. Baseline preparation only after the same manifests are frozen
+Then convert exactly the frozen prior IDs:
 
 ```bash
 python tools/run_official_baselines.py \
@@ -259,24 +232,20 @@ python tools/run_official_baselines.py \
   --prepare-only
 ```
 
-Both official converters verify that the canonicalized chain sequence is exactly the frozen manifest sequence. A method-specific conversion failure is an error and must be reported; the failed structure is not silently replaced for only one method.
+A method-specific conversion failure is an error. Never replace only the failed baseline sample while keeping a different ID for DM-ICF.
 
----
+## 9. Versioning
 
-## 9. Data versioning
-
-Never overwrite a reported dataset version. A complete data version consists of:
+A complete data version consists of:
 
 ```text
 RCSB query JSON
-+ download manifests and failures
-+ screening eligible/rejected tables and summaries
-+ Rfam checksums
-+ MMseqs/Infernal logs
++ download manifests/failures/checksums
++ screening eligible/rejected tables
++ MMseqs + Infernal/Rfam logs and versions
 + annotated candidate tables
 + frozen manifests and SHA256 metadata
-+ data audit outputs
-+ software versions
++ data-audit outputs
 ```
 
-If any screening threshold, clustering universe, Rfam release or split seed changes, create `pilot_v2` rather than mutating `pilot_v1`.
+Changing a screening threshold, Rfam release, clustering universe or split seed creates `pilot_v2` rather than mutating `pilot_v1`.

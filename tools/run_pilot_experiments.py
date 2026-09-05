@@ -1,26 +1,11 @@
 #!/usr/bin/env python3
-"""Run the complete frozen mini-pilot without leaking final-test information.
+"""Orchestrate the frozen PR mini-pilot without final-test feedback.
 
-The orchestrator deliberately separates two phases:
-
-DEVELOPMENT PHASE
-  - 900/100 Protein prior split;
-  - 900/100 RNA prior split;
-  - 900/100 complex train/validation split;
-  - validation chooses epoch counts and all tunable settings.
-
-FINAL REFIT PHASE
-  - retrain Protein prior on all 1,000 Protein structures;
-  - retrain RNA prior on all 1,000 RNA structures;
-  - retrain C -> DeltaC -> alpha -> joint on all 1,000 complex-development samples;
-  - every stage uses the epoch count selected during development;
-  - validation and the final 100 complexes are not consulted during refit.
-
-Only these full-1,000 refit checkpoints are allowed to support the primary final
-claim. Development checkpoints remain available for diagnostics and data-efficiency
-curves.
-
-Default is --dry-run. Expensive training starts only with --execute.
+Primary models use 900/100 only for model-selection, then replay the selected
+schedule prefix from random initialization on the full 1,000 development samples.
+The heavyweight mechanistic/candidate-generation battery is restricted to the
+predeclared analysis seed; all three primary seeds still receive the inexpensive
+core final-100 evaluation used for seed aggregation.
 """
 from __future__ import annotations
 
@@ -37,7 +22,12 @@ import torch
 import yaml
 
 from pr_pilot.data.manifest import deterministic_sample
-from pr_pilot.training.refit import refit_full_pipeline, refit_stage, selected_epoch_count
+from pr_pilot.training.refit import (
+    refit_full_pipeline,
+    refit_stage,
+    selected_epoch_count,
+    selected_schedule_horizon,
+)
 from pr_pilot.training.stages import Stage
 
 
@@ -82,6 +72,12 @@ def _config_for_seed(base: dict, seed: int, suffix: str = "primary") -> dict:
     return config
 
 
+def _scratch_config(primary: dict, seed: int) -> dict:
+    config = _config_for_seed(primary, seed, suffix="scratch_joint")
+    config["training_stages"]["joint"]["unfreezing_mode"] = "all_trainable_from_start"
+    return config
+
+
 def _targeted_variant(base: dict, name: str) -> dict:
     config = copy.deepcopy(base)
     if name == "distance_only":
@@ -105,13 +101,7 @@ def _train_all_development(
     execute: bool,
 ) -> None:
     command = _cli(
-        "train-all",
-        "--config",
-        config_path,
-        "--manifest-root",
-        manifest_root,
-        "--out",
-        out_dir,
+        "train-all", "--config", config_path, "--manifest-root", manifest_root, "--out", out_dir
     )
     if device:
         command += ["--device", device]
@@ -203,18 +193,37 @@ def _full_suite(
     _run(command, execute)
 
 
+def _delta_drift(
+    config_path: Path,
+    checkpoint: Path,
+    manifest: Path,
+    output: Path,
+    device: str | None,
+    execute: bool,
+) -> None:
+    command = _module(
+        "pr_pilot.evaluation.field_audit",
+        "--config",
+        config_path,
+        "--checkpoint",
+        checkpoint,
+        "--manifest",
+        manifest,
+        "--out",
+        output,
+    )
+    if device:
+        command += ["--device", device]
+    _run(command, execute)
+
+
 def _zero_partner_field_checkpoint(source: Path, destination: Path, execute: bool) -> None:
-    """Create an exact dual-structural-prior checkpoint for component ladder B."""
     print(f"[transform] zero interaction field: {source} -> {destination}")
     if not execute:
         return
     payload = torch.load(source, map_location="cpu")
     state = payload["model"]
-    for key in [
-        "dmicf.global_c.raw",
-        "dmicf.delta.out.weight",
-        "dmicf.delta.out.bias",
-    ]:
+    for key in ["dmicf.global_c.raw", "dmicf.delta.out.weight", "dmicf.delta.out.bias"]:
         state[key] = torch.zeros_like(state[key])
     payload["stage"] = "dual_structural_prior_partner_blind"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -224,15 +233,16 @@ def _zero_partner_field_checkpoint(source: Path, destination: Path, execute: boo
 def _fixed_fraction_manifest(
     full_train: Path,
     fraction: float,
-    seed: int,
+    ranking_seed: int,
     destination: Path,
     execute: bool,
 ) -> int:
+    """Create nested data-efficiency subsets by using one ranking seed at all fractions."""
     frame = pd.read_csv(full_train, sep="\t")
     n = max(1, int(round(len(frame) * fraction)))
-    print(f"[data-efficiency] {fraction:.2f} -> {n}/{len(frame)} training complexes: {destination}")
+    print(f"[data-efficiency] {fraction:.2f} -> {n}/{len(frame)}: {destination}")
     if execute:
-        subset = deterministic_sample(frame, n, seed=seed, key="sample_id")
+        subset = deterministic_sample(frame, n, seed=ranking_seed, key="sample_id")
         destination.parent.mkdir(parents=True, exist_ok=True)
         subset.to_csv(destination, sep="\t", index=False)
     return n
@@ -275,8 +285,8 @@ def run_primary(
     device: str | None,
     execute: bool,
 ) -> list[dict]:
-    """Development-select then final-refit all primary seeds."""
     rows = []
+    analysis_seed = int(base["evaluation"].get("analysis_seed", base["experiment"]["pilot_seed"]))
     for seed in [int(x) for x in base["experiment"]["primary_training_seeds"]]:
         config = _config_for_seed(base, seed)
         config_path = _write_yaml(config, root / "configs" / f"primary_seed{seed}.yaml")
@@ -284,29 +294,47 @@ def run_primary(
         _train_all_development(config_path, manifests, development, device, execute)
 
         refit_dir = root / "training" / "primary_refit_full1000" / f"seed{seed}"
-        print(f"[final refit] seed={seed}: all 1000 Protein + 1000 RNA + 1000 complex development samples")
-        if execute:
-            final_checkpoint = refit_full_pipeline(
-                config,
-                manifests,
-                development,
-                refit_dir,
-                device=device,
-            )
-        else:
-            final_checkpoint = refit_dir / "joint" / "refit.pt"
+        print(
+            f"[final refit] seed={seed}: 1000 Protein + 1000 RNA + 1000 complex development samples"
+        )
+        final_checkpoint = (
+            refit_full_pipeline(config, manifests, development, refit_dir, device=device)
+            if execute
+            else refit_dir / "joint" / "refit.pt"
+        )
 
         evaluation = root / "evaluation" / "primary_refit_full1000" / f"seed{seed}"
-        _full_suite(
-            config_path,
-            final_checkpoint,
-            manifests / "complex_test.tsv",
-            manifests / "complex_dev.tsv",
-            evaluation,
-            device,
-            execute,
+        if seed == analysis_seed:
+            _full_suite(
+                config_path,
+                final_checkpoint,
+                manifests / "complex_test.tsv",
+                manifests / "complex_dev.tsv",
+                evaluation,
+                device,
+                execute,
+            )
+            _delta_drift(
+                config_path,
+                final_checkpoint,
+                manifests / "complex_dev.tsv",
+                evaluation / "delta_c_drift_dev",
+                device,
+                execute,
+            )
+        else:
+            _core_eval(
+                config_path,
+                final_checkpoint,
+                manifests / "complex_test.tsv",
+                evaluation,
+                "DMICF_full1000",
+                device,
+                execute,
+            )
+        rows.append(
+            {"model": "DMICF_full1000", "seed": seed, "run_dir": str(evaluation.resolve())}
         )
-        rows.append({"model": "DMICF_full1000", "seed": seed, "run_dir": str(evaluation.resolve())})
     return rows
 
 
@@ -317,20 +345,25 @@ def run_component_ladder(
     device: str | None,
     execute: bool,
 ) -> list[dict]:
-    """A--F component comparison using full-1000 refit checkpoints where applicable."""
     rows = []
     for seed in [int(x) for x in base["experiment"]["primary_training_seeds"]]:
         config = _config_for_seed(base, seed)
-        config_path = _write_yaml(config, root / "configs" / f"primary_seed{seed}.yaml")
-        development = root / "training" / "primary_development" / f"seed{seed}"
+        primary_config_path = _write_yaml(
+            config, root / "configs" / f"primary_seed{seed}.yaml"
+        )
         refit_root = root / "training" / "primary_refit_full1000" / f"seed{seed}"
 
-        # A: choose scratch-joint epoch count on 900/100, then refit scratch joint
-        # on all 1000 complex-development structures for that fixed epoch count.
-        scratch_dev = root / "training" / "component_ladder" / f"seed{seed}" / "A_scratch_development"
+        # Scratch control: all random-initialized parameters are trainable from step 0.
+        scratch_cfg = _scratch_config(base, seed)
+        scratch_config_path = _write_yaml(
+            scratch_cfg, root / "configs" / f"scratch_joint_seed{seed}.yaml"
+        )
+        scratch_dev = (
+            root / "training" / "component_ladder" / f"seed{seed}" / "A_scratch_development"
+        )
         scratch_dev_checkpoint = _train_one_development_stage(
             Stage.JOINT,
-            config_path,
+            scratch_config_path,
             manifests / "complex_train.tsv",
             manifests / "complex_val.tsv",
             scratch_dev,
@@ -338,36 +371,40 @@ def run_component_ladder(
             device,
             execute,
         )
-        scratch_refit_dir = root / "training" / "component_ladder" / f"seed{seed}" / "A_scratch_refit_full1000"
+        scratch_refit_dir = (
+            root / "training" / "component_ladder" / f"seed{seed}" / "A_scratch_refit_full1000"
+        )
         if execute:
             scratch_epochs = selected_epoch_count(scratch_dev_checkpoint)
+            horizon = selected_schedule_horizon(scratch_dev_checkpoint, scratch_cfg, Stage.JOINT)
             scratch_checkpoint = refit_stage(
-                config,
+                scratch_cfg,
                 Stage.JOINT,
                 manifests / "complex_dev.tsv",
                 scratch_epochs,
                 scratch_refit_dir,
                 init_checkpoint=None,
                 device=device,
+                schedule_horizon_epochs=horizon,
             )
         else:
             scratch_checkpoint = scratch_refit_dir / "refit.pt"
 
-        # B: the full-1000 dual-prior refit after RNA-prior stage, but with exact
-        # zero interaction field so no random C leaks into the prior-only control.
         prior_source = refit_root / "rna_prior" / "refit.pt"
-        prior_zero = root / "training" / "component_ladder" / f"seed{seed}" / "B_dual_prior_zero_field.pt"
+        prior_zero = (
+            root / "training" / "component_ladder" / f"seed{seed}" / "B_dual_prior_zero_field.pt"
+        )
         _zero_partner_field_checkpoint(prior_source, prior_zero, execute)
 
         ladder = {
-            "A_scratch_joint_full1000": scratch_checkpoint,
-            "B_dual_prior_full1000": prior_zero,
-            "C_global_C_full1000": refit_root / "global_c" / "refit.pt",
-            "D_DeltaC_full1000": refit_root / "delta_c" / "refit.pt",
-            "E_alpha_full1000": refit_root / "alpha" / "refit.pt",
-            "F_joint_full1000": refit_root / "joint" / "refit.pt",
+            "A_scratch_joint_full1000": (scratch_checkpoint, scratch_config_path),
+            "B_dual_prior_full1000": (prior_zero, primary_config_path),
+            "C_global_C_full1000": (refit_root / "global_c" / "refit.pt", primary_config_path),
+            "D_DeltaC_full1000": (refit_root / "delta_c" / "refit.pt", primary_config_path),
+            "E_alpha_full1000": (refit_root / "alpha" / "refit.pt", primary_config_path),
+            "F_joint_full1000": (refit_root / "joint" / "refit.pt", primary_config_path),
         }
-        for model_name, checkpoint in ladder.items():
+        for model_name, (checkpoint, config_path) in ladder.items():
             evaluation = root / "evaluation" / "component_ladder" / model_name / f"seed{seed}"
             _core_eval(
                 config_path,
@@ -389,25 +426,20 @@ def run_data_efficiency(
     device: str | None,
     execute: bool,
 ) -> list[dict]:
-    """10/25/50/100% of the 900 complex-training set with unchanged 100 validation."""
+    """Nested 10/25/50/100% subsets of the same 900-complex development train split."""
     rows = []
     fractions = [float(x) for x in base["evaluation"]["data_efficiency_fractions"]]
     for seed in [int(x) for x in base["experiment"]["primary_training_seeds"]]:
         config = _config_for_seed(base, seed)
         config_path = _write_yaml(config, root / "configs" / f"primary_seed{seed}.yaml")
-        # Development dual prior is intentionally reused: the question here is
-        # complex-data efficiency, not the effect of changing prior data volume.
         prior = root / "training" / "primary_development" / f"seed{seed}" / "rna_prior" / "best.pt"
-        for fraction in fractions:
+        ranking_seed = seed + 9901
+        for fraction in sorted(fractions):
             percent = int(round(100 * fraction))
             model_name = f"DMICF_complex_train_{percent:03d}pct"
             subset = root / "manifests" / "data_efficiency" / f"seed{seed}_{percent:03d}pct.tsv"
             _fixed_fraction_manifest(
-                manifests / "complex_train.tsv",
-                fraction,
-                seed + percent * 7919,
-                subset,
-                execute,
+                manifests / "complex_train.tsv", fraction, ranking_seed, subset, execute
             )
             previous = prior
             train_root = root / "training" / "data_efficiency" / model_name / f"seed{seed}"
@@ -443,7 +475,6 @@ def run_targeted_ablation(
     device: str | None,
     execute: bool,
 ) -> list[dict]:
-    """Full-pipeline, full-1000 refit for three predeclared implementation questions."""
     rows = []
     variants = ["distance_only", "no_coordinate_noise", "no_graph_stochastic_regularization"]
     for variant in variants:
@@ -451,19 +482,18 @@ def run_targeted_ablation(
         for seed in [int(x) for x in base["experiment"]["primary_training_seeds"]]:
             config = _config_for_seed(variant_base, seed, suffix=variant)
             config_path = _write_yaml(config, root / "configs" / f"{variant}_seed{seed}.yaml")
-            development = root / "training" / "targeted_ablation_development" / variant / f"seed{seed}"
+            development = (
+                root / "training" / "targeted_ablation_development" / variant / f"seed{seed}"
+            )
             _train_all_development(config_path, manifests, development, device, execute)
-            refit_root = root / "training" / "targeted_ablation_refit_full1000" / variant / f"seed{seed}"
-            if execute:
-                final_checkpoint = refit_full_pipeline(
-                    config,
-                    manifests,
-                    development,
-                    refit_root,
-                    device=device,
-                )
-            else:
-                final_checkpoint = refit_root / "joint" / "refit.pt"
+            refit_root = (
+                root / "training" / "targeted_ablation_refit_full1000" / variant / f"seed{seed}"
+            )
+            final_checkpoint = (
+                refit_full_pipeline(config, manifests, development, refit_root, device=device)
+                if execute
+                else refit_root / "joint" / "refit.pt"
+            )
             evaluation = root / "evaluation" / "targeted_ablation" / variant / f"seed{seed}"
             _core_eval(
                 config_path,
@@ -528,17 +558,26 @@ def main() -> None:
         "families": sorted(requested),
         "execute": execute,
         "primary_training_seeds": base["experiment"]["primary_training_seeds"],
-        "primary_final_model_policy": "validation-select epochs on 900/100, then refit from scratch on all 1000 without validation",
-        "final_test_policy": "100 complexes never used for optimization or selection; only predeclared final analyses",
+        "analysis_seed": base["evaluation"].get("analysis_seed"),
+        "primary_final_model_policy": (
+            "900/100 selects schedule prefix; refit from scratch on all 1000 without validation"
+        ),
+        "heavy_final_battery_policy": "predeclared analysis seed only; other seeds get core final evaluation",
+        "final_test_policy": "100 complexes never used for optimization or model selection",
     }
-    (args.out / "experiment_plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    (args.out / "experiment_plan.json").write_text(
+        json.dumps(plan, indent=2), encoding="utf-8"
+    )
 
-    all_statistics = []
+    all_statistics: list[dict] = []
     if "primary" in requested:
-        primary_rows = run_primary(base, args.manifest_root, args.out, args.device, execute)
-        all_statistics.extend(primary_rows)
+        all_statistics.extend(
+            run_primary(base, args.manifest_root, args.out, args.device, execute)
+        )
     if "component_ladder" in requested:
-        ladder_rows = run_component_ladder(base, args.manifest_root, args.out, args.device, execute)
+        ladder_rows = run_component_ladder(
+            base, args.manifest_root, args.out, args.device, execute
+        )
         _compare_runs(
             ladder_rows,
             args.out / "statistics" / "component_ladder_runs.tsv",
@@ -548,7 +587,9 @@ def main() -> None:
             execute,
         )
     if "data_efficiency" in requested:
-        efficiency_rows = run_data_efficiency(base, args.manifest_root, args.out, args.device, execute)
+        efficiency_rows = run_data_efficiency(
+            base, args.manifest_root, args.out, args.device, execute
+        )
         _compare_runs(
             efficiency_rows,
             args.out / "statistics" / "data_efficiency_runs.tsv",
@@ -558,15 +599,19 @@ def main() -> None:
             execute,
         )
     if "targeted_ablation" in requested:
-        ablation_rows = run_targeted_ablation(base, args.manifest_root, args.out, args.device, execute)
-        all_statistics.extend(ablation_rows)
+        all_statistics.extend(
+            run_targeted_ablation(base, args.manifest_root, args.out, args.device, execute)
+        )
 
     if execute and all_statistics:
-        statistics_manifest = args.out / "statistics" / "primary_and_full_ablation_runs.tsv"
-        statistics_manifest.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(all_statistics).to_csv(statistics_manifest, sep="\t", index=False)
+        path = args.out / "statistics" / "primary_and_full_ablation_runs.tsv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(all_statistics).to_csv(path, sep="\t", index=False)
     if not execute:
-        print("\nDRY RUN: no GPU training started. Re-run with --execute only after data audit and baseline preparation pass.")
+        print(
+            "\nDRY RUN: no GPU training started. Use --execute only after data audit, "
+            "baseline preflight and GO/NO-GO checks pass."
+        )
 
 
 if __name__ == "__main__":
