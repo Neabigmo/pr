@@ -1,0 +1,144 @@
+experiment:
+  name: dmicf_mini_pilot
+  pilot_seed: 20260905
+  strict_mode: true
+  output_root: artifacts
+  fail_on_test_leakage: true
+
+sampling:
+  protein_pool_size: 1000
+  protein_train: 900
+  protein_val: 100
+  rna_pool_size: 1000
+  rna_train: 900
+  rna_val: 100
+  complex_pool_size: 1100
+  complex_dev: 1000
+  complex_test: 100
+  complex_train: 900
+  complex_val: 100
+  final_refit_on_full_dev: true
+  forbid_predicted_structures: true
+
+structure_filters:
+  exclude_ribosome: true
+  exclude_spliceosome: true
+  require_biological_assembly: true
+  protein_min_length: 30
+  rna_min_length: 5
+  max_total_tokens: 1000
+  max_resolution_angstrom: 4.0
+  preferred_resolution_angstrom: 3.5
+  require_interface_contact: true
+  max_interface_missing_fraction: 0.10
+
+leakage:
+  protein_strict_cluster: P30
+  rna_sequence_cluster: R80
+  require_rfam_holdout_when_available: true
+  group_conformers: true
+  group_mutation_series: true
+  group_exact_pair: true
+
+geometry:
+  hidden_dim: 256
+  protein_layers: 6
+  rna_layers: 6
+  interaction_layers: 3
+  pr_cutoff_angstrom: 8.0
+  pr_max_neighbors: 12
+  intra_max_neighbors: 32
+  rbf_bins: 24
+  coordinate_noise_angstrom: 0.10
+  edge_dropout: 0.05
+  pr_edge_dropout: 0.05
+  drop_path: 0.05
+  rich_pr_geometry: true
+  prohibit_rna_base_identity_atoms: true
+
+masking:
+  min_fraction: 0.10
+  max_fraction: 1.00
+  random_mask_probability: 0.70
+  local_patch_probability: 0.30
+  wrong_token_fraction_within_corruption: 0.10
+  interface_mask_multiplier: 2.0
+  partner_token_dropout: 0.15
+
+loss:
+  protein_label_smoothing: 0.05
+  rna_label_smoothing: 0.05
+  global_c_label_smoothing: 0.0
+  normalize_protein_by_log_alphabet: true
+  normalize_rna_by_log_alphabet: true
+  equalize_interface_noninterface_groups: true
+  equalize_protein_rna_in_joint: true
+  c_l2_enabled: true
+  c_l2_target_fraction: 0.02
+  delta_c_norm_penalty: 0.0
+  alpha_entropy_warmup_weight: 0.01
+  alpha_entropy_warmup_steps: 1000
+
+optimization:
+  optimizer: adamw
+  lr_heads: 0.001
+  lr_projections: 0.0005
+  lr_encoder_top: 0.0001
+  lr_encoder_bottom: 0.00002
+  lr_global_c_joint: 0.00001
+  weight_decay: 0.01
+  warmup_fraction: 0.04
+  schedule: cosine
+  grad_clip_norm: 1.0
+  precision: bf16
+  layerwise_lr_decay: 0.85
+  early_stopping_patience: 15
+
+training_stages:
+  protein_prior:
+    enabled: true
+  rna_prior:
+    enabled: true
+  global_c:
+    enabled: true
+    conditional_task_ratio: [1, 1]
+    hard_context_fraction_late: 0.20
+  delta_c:
+    enabled: true
+    zero_init_output: true
+  alpha:
+    enabled: true
+    zero_init_score_residual: true
+  joint:
+    enabled: true
+    task_ratio_start: [2, 2, 1]
+    task_ratio_end: [1, 1, 1]
+    gradual_unfreezing: true
+
+inference:
+  candidates_per_complex: 64
+  initial_temperature: 1.0
+  random_mixed_order: true
+  spir:
+    enabled: true
+    reopen_fraction: 0.30
+    temperature: 0.5
+    reverse_direction_fraction: 0.5
+    cycles: 1
+
+evaluation:
+  noise_levels_angstrom: [0.0, 0.05, 0.10, 0.20]
+  pr_edge_drop_levels: [0.0, 0.05, 0.10, 0.20]
+  partner_hide_levels: [0.0, 0.10, 0.20, 0.40]
+  bootstrap_resamples: 10000
+  primary_multiple_testing: holm
+  exploratory_multiple_testing: bh
+  data_efficiency_fractions: [0.10, 0.25, 0.50, 1.00]
+  run_partner_scramble: true
+  run_counterfactual_mutation: true
+  run_pmi_validation: true
+  run_delta_c_analysis: true
+  run_alpha_analysis: true
+  run_calibration: true
+  run_order_sensitivity: true
+  run_spir_ablation: true
