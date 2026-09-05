@@ -2,10 +2,11 @@
 
 Primary scientific ownership is deliberately strict:
 C -> (q, DeltaC) -> alpha -> joint coordination.
-The global C anchor remains frozen during the primary joint stage.  A genuinely
-fresh scratch-joint model is detected from the exact zero-initialized contextual
-heads and is marked ``_scratch_joint_mode`` so gradual unfreezing can never
-silently handicap that control.
+The global C anchor remains frozen during the primary joint stage.
+
+Scratch-vs-pretrained joint semantics are explicit. They must never be inferred
+from parameter values because a valid dual-prior checkpoint also has zero-initialized
+DeltaC/alpha heads before complex training.
 """
 from __future__ import annotations
 
@@ -42,48 +43,12 @@ class StageContract:
 
 
 CONTRACTS = {
-    Stage.PROTEIN_PRIOR: StageContract(
-        Stage.PROTEIN_PRIOR,
-        "protein_train",
-        ("protein_inverse_folding",),
-        "protein_val_normalized_nll",
-        ("rna_partner_sequence", "pr_edges"),
-    ),
-    Stage.RNA_PRIOR: StageContract(
-        Stage.RNA_PRIOR,
-        "rna_train",
-        ("rna_inverse_folding",),
-        "rna_val_normalized_nll",
-        ("protein_partner_sequence", "pr_edges", "native_base_identity_atoms"),
-    ),
-    Stage.GLOBAL_C: StageContract(
-        Stage.GLOBAL_C,
-        "complex_train",
-        ("protein_conditional_interface", "rna_conditional_interface"),
-        "complex_val_bidirectional_interface_nll",
-        ("predicted_structures", "test_manifest", "learned_delta_c", "learned_alpha"),
-    ),
-    Stage.DELTA_C: StageContract(
-        Stage.DELTA_C,
-        "complex_train",
-        ("protein_conditional_interface", "rna_conditional_interface"),
-        "complex_val_bidirectional_interface_nll",
-        ("test_manifest", "learned_alpha"),
-    ),
-    Stage.ALPHA: StageContract(
-        Stage.ALPHA,
-        "complex_train",
-        ("protein_conditional_interface", "rna_conditional_interface"),
-        "complex_val_bidirectional_interface_nll",
-        ("test_manifest",),
-    ),
-    Stage.JOINT: StageContract(
-        Stage.JOINT,
-        "complex_train",
-        ("protein_conditional", "rna_conditional", "joint"),
-        "complex_val_sequential_pseudonll",
-        ("test_manifest",),
-    ),
+    Stage.PROTEIN_PRIOR: StageContract(Stage.PROTEIN_PRIOR, "protein_train", ("protein_inverse_folding",), "protein_val_normalized_nll", ("rna_partner_sequence", "pr_edges")),
+    Stage.RNA_PRIOR: StageContract(Stage.RNA_PRIOR, "rna_train", ("rna_inverse_folding",), "rna_val_normalized_nll", ("protein_partner_sequence", "pr_edges", "native_base_identity_atoms")),
+    Stage.GLOBAL_C: StageContract(Stage.GLOBAL_C, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("predicted_structures", "test_manifest", "learned_delta_c", "learned_alpha")),
+    Stage.DELTA_C: StageContract(Stage.DELTA_C, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("test_manifest", "learned_alpha")),
+    Stage.ALPHA: StageContract(Stage.ALPHA, "complex_train", ("protein_conditional_interface", "rna_conditional_interface"), "complex_val_bidirectional_interface_nll", ("test_manifest",)),
+    Stage.JOINT: StageContract(Stage.JOINT, "complex_train", ("protein_conditional", "rna_conditional", "joint"), "complex_val_sequential_pseudonll", ("test_manifest",)),
 }
 
 
@@ -97,37 +62,11 @@ def set_all_trainable(model: JointPriorAndFieldModel, value: bool = True) -> Non
         p.requires_grad = value
 
 
-def _tensor_is_exact_zero(tensor: torch.Tensor) -> bool:
-    return bool(torch.count_nonzero(tensor.detach()).item() == 0)
-
-
-def _looks_like_fresh_scratch_joint(model: JointPriorAndFieldModel) -> bool:
-    """Identify the component-ladder scratch model before any complex training.
-
-    DeltaC output and learned-alpha residual are deliberately initialized to exact
-    zeros.  A primary model arriving from Delta/Alpha training should no longer
-    satisfy this exact-zero signature.  We use this only to protect the explicit
-    scratch control from a pretrained-specific freezing schedule; the mode is
-    recorded on the model and in checkpoints/metrics by the caller.
-    """
-    return (
-        _tensor_is_exact_zero(model.dmicf.delta.out.weight)
-        and _tensor_is_exact_zero(model.dmicf.delta.out.bias)
-        and _tensor_is_exact_zero(model.dmicf.relevance.score.weight)
-        and _tensor_is_exact_zero(model.dmicf.relevance.score.bias)
-    )
-
-
-def apply_joint_unfreezing(
-    model: JointPriorAndFieldModel, progress: float
-) -> dict[str, int]:
-    """Release pretrained encoders gradually, unless this is the scratch control."""
+def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> dict[str, int]:
+    """Release pretrained encoders gradually; explicit scratch mode stays fully trainable."""
     if bool(getattr(model, "_scratch_joint_mode", False)):
         set_all_trainable(model, True)
-        return {
-            "protein": len(model.protein_encoder.message),
-            "rna": len(model.rna_encoder.message),
-        }
+        return {"protein": len(model.protein_encoder.message), "rna": len(model.rna_encoder.message)}
 
     progress = float(min(max(progress, 0.0), 1.0))
     _set_module(model.dmicf, False)
@@ -138,12 +77,7 @@ def apply_joint_unfreezing(
     model.dmicf.raw_lambda_r.requires_grad = True
     model.dmicf.global_c.raw.requires_grad = False
 
-    for module in [
-        model.protein_decoder,
-        model.rna_decoder,
-        model.protein_head,
-        model.rna_head,
-    ]:
+    for module in [model.protein_decoder, model.rna_decoder, model.protein_head, model.rna_head]:
         _set_module(module, True)
 
     released: dict[str, int] = {}
@@ -162,17 +96,29 @@ def apply_joint_unfreezing(
     return released
 
 
-def configure_stage(model: JointPriorAndFieldModel, stage: Stage) -> StageContract:
+def configure_stage(
+    model: JointPriorAndFieldModel,
+    stage: Stage,
+    *,
+    scratch_joint: bool = False,
+) -> StageContract:
+    """Apply one scientific ownership state.
+
+    ``scratch_joint=True`` is legal only for Stage.JOINT and means every parameter
+    is trainable from step 0. A pretrained dual-prior model must use the default
+    False even if its not-yet-used DeltaC/alpha heads remain exact zero.
+    """
+    if scratch_joint and stage != Stage.JOINT:
+        raise ValueError("scratch_joint is valid only for Stage.JOINT")
     set_trainable_stage(model, stage.value)
+    model._scratch_joint_mode = bool(scratch_joint)
     if stage == Stage.ALPHA:
         _set_module(model.dmicf.interaction, False)
         _set_module(model.dmicf.delta, False)
         _set_module(model.dmicf.global_c, False)
         _set_module(model.dmicf.relevance, True)
     elif stage == Stage.JOINT:
-        scratch = _looks_like_fresh_scratch_joint(model)
-        model._scratch_joint_mode = scratch
-        if scratch:
+        if scratch_joint:
             set_all_trainable(model, True)
         else:
             apply_joint_unfreezing(model, 0.0)
@@ -183,11 +129,7 @@ def trainable_parameter_report(model: nn.Module) -> dict[str, dict[str, int]]:
     report: dict[str, dict[str, int]] = {}
     for name, param in model.named_parameters():
         parts = name.split(".")
-        family = (
-            ".".join(parts[:2])
-            if parts[0] == "dmicf" and len(parts) > 1
-            else parts[0]
-        )
+        family = ".".join(parts[:2]) if parts[0] == "dmicf" and len(parts) > 1 else parts[0]
         bucket = report.setdefault(family, {"trainable": 0, "frozen": 0})
         bucket["trainable" if param.requires_grad else "frozen"] += param.numel()
     return report
@@ -201,29 +143,15 @@ def _group(params: list[nn.Parameter], lr: float, wd: float) -> dict:
     return {"params": params, "lr": lr, "weight_decay": wd}
 
 
-def _encoder_layer_groups(
-    enc: SimpleSparseBackboneEncoder,
-    top_lr: float,
-    bottom_lr: float,
-    decay: float,
-    wd: float,
-) -> list[dict]:
+def _encoder_layer_groups(enc: SimpleSparseBackboneEncoder, top_lr: float, bottom_lr: float, decay: float, wd: float) -> list[dict]:
     n = len(enc.message)
     groups: list[dict] = []
     for idx in range(n):
         depth_from_top = n - 1 - idx
         lr = max(bottom_lr, top_lr * (decay**depth_from_top))
-        groups.append(
-            _group(
-                _params(enc.message[idx], False) + _params(enc.update[idx], False),
-                lr,
-                wd,
-            )
-        )
+        groups.append(_group(_params(enc.message[idx], False) + _params(enc.update[idx], False), lr, wd))
     groups.append(_group(_params(enc.norm, False), max(bottom_lr, top_lr * decay), wd))
-    groups.append(
-        _group(_params(enc.node_proj, False) + _params(enc.edge_proj, False), bottom_lr, wd)
-    )
+    groups.append(_group(_params(enc.node_proj, False) + _params(enc.edge_proj, False), bottom_lr, wd))
     return groups
 
 
@@ -240,24 +168,13 @@ def build_optimizer(
 ) -> torch.optim.Optimizer:
     groups: list[dict] = []
     if stage == Stage.PROTEIN_PRIOR:
-        groups += [
-            _group(_params(model.protein_encoder), lr_encoder_top, weight_decay),
-            _group(_params(model.protein_decoder), lr_encoder_top, weight_decay),
-            _group(_params(model.protein_head), lr_heads, weight_decay),
-        ]
+        groups += [_group(_params(model.protein_encoder), lr_encoder_top, weight_decay), _group(_params(model.protein_decoder), lr_encoder_top, weight_decay), _group(_params(model.protein_head), lr_heads, weight_decay)]
     elif stage == Stage.RNA_PRIOR:
-        groups += [
-            _group(_params(model.rna_encoder), lr_encoder_top, weight_decay),
-            _group(_params(model.rna_decoder), lr_encoder_top, weight_decay),
-            _group(_params(model.rna_head), lr_heads, weight_decay),
-        ]
+        groups += [_group(_params(model.rna_encoder), lr_encoder_top, weight_decay), _group(_params(model.rna_decoder), lr_encoder_top, weight_decay), _group(_params(model.rna_head), lr_heads, weight_decay)]
     elif stage == Stage.GLOBAL_C:
         groups.append(_group([model.dmicf.global_c.raw], lr_heads, 0.0))
     elif stage == Stage.DELTA_C:
-        groups += [
-            _group(_params(model.dmicf.interaction), lr_heads, weight_decay),
-            _group(_params(model.dmicf.delta), lr_heads, weight_decay),
-        ]
+        groups += [_group(_params(model.dmicf.interaction), lr_heads, weight_decay), _group(_params(model.dmicf.delta), lr_heads, weight_decay)]
     elif stage == Stage.ALPHA:
         groups.append(_group(_params(model.dmicf.relevance), lr_heads, weight_decay))
     elif stage == Stage.JOINT:
@@ -269,32 +186,10 @@ def build_optimizer(
             _group(_params(model.rna_decoder, False), lr_projections, weight_decay),
             _group(_params(model.protein_head, False), lr_projections, weight_decay),
             _group(_params(model.rna_head, False), lr_projections, weight_decay),
-            *_encoder_layer_groups(
-                model.protein_encoder,
-                lr_encoder_top,
-                lr_encoder_bottom,
-                layerwise_lr_decay,
-                weight_decay,
-            ),
-            *_encoder_layer_groups(
-                model.rna_encoder,
-                lr_encoder_top,
-                lr_encoder_bottom,
-                layerwise_lr_decay,
-                weight_decay,
-            ),
-            _group(
-                [model.dmicf.global_c.raw],
-                lr_projections
-                if bool(getattr(model, "_scratch_joint_mode", False))
-                else lr_global_c_joint,
-                0.0,
-            ),
-            _group(
-                [model.dmicf.raw_lambda_p, model.dmicf.raw_lambda_r],
-                lr_projections,
-                0.0,
-            ),
+            *_encoder_layer_groups(model.protein_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
+            *_encoder_layer_groups(model.rna_encoder, lr_encoder_top, lr_encoder_bottom, layerwise_lr_decay, weight_decay),
+            _group([model.dmicf.global_c.raw], lr_projections if bool(getattr(model, "_scratch_joint_mode", False)) else lr_global_c_joint, 0.0),
+            _group([model.dmicf.raw_lambda_p, model.dmicf.raw_lambda_r], lr_projections, 0.0),
         ]
     else:
         raise ValueError(stage)
@@ -305,9 +200,7 @@ def build_optimizer(
 
 
 class TaskRatioSchedule:
-    def __init__(
-        self, start=(2, 2, 1), end=(1, 1, 1), transition_fraction: float = 0.7
-    ):
+    def __init__(self, start=(2, 2, 1), end=(1, 1, 1), transition_fraction: float = 0.7):
         self.start, self.end = start, end
         self.transition_fraction = transition_fraction
         self.names = ("protein_conditional", "rna_conditional", "joint")
@@ -325,6 +218,4 @@ def assert_stage_batch(contract: StageContract, batch_meta: dict) -> None:
         raise AssertionError(f"Task {task!r} is illegal for {contract.stage.value}")
     for forbidden in contract.forbidden_inputs:
         if batch_meta.get(forbidden, False):
-            raise AssertionError(
-                f"Forbidden input {forbidden!r} present in {contract.stage.value}"
-            )
+            raise AssertionError(f"Forbidden input {forbidden!r} present in {contract.stage.value}")
