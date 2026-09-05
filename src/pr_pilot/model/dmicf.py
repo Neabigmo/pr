@@ -125,7 +125,10 @@ class SimpleSparseBackboneEncoder(nn.Module):
                 h = upd(h)
                 continue
             m = msg_net(torch.cat([h[src], h[dst], e], dim=-1))
-            agg = torch.zeros_like(h)
+            # Linear layers may emit bf16 under autocast while the residual
+            # state is kept in fp32.  The in-place reduction requires both
+            # tensors to have one dtype, so accumulate in message dtype.
+            agg = torch.zeros_like(h, dtype=m.dtype)
             agg.index_add_(0, dst, m)
             deg = torch.zeros(h.shape[0], device=h.device, dtype=h.dtype)
             deg.index_add_(0, dst, torch.ones_like(dst, dtype=h.dtype))
@@ -175,7 +178,8 @@ class SparseSequenceContextDecoder(nn.Module):
                 h = upd(h)
                 continue
             m = msg_net(torch.cat([h[src], h[dst], token_h[src], edge_h], dim=-1))
-            agg = torch.zeros_like(h)
+            # Keep the reduction dtype aligned with the autocast message.
+            agg = torch.zeros_like(h, dtype=m.dtype)
             agg.index_add_(0, dst, m)
             deg = torch.zeros(h.shape[0], device=h.device, dtype=h.dtype)
             deg.index_add_(0, dst, torch.ones_like(dst, dtype=h.dtype))

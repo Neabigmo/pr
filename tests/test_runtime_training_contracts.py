@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from pr_pilot.model.dmicf import PRBatch, stochastic_depth
+from pr_pilot.model.dmicf import PRBatch, SimpleSparseBackboneEncoder, SparseSequenceContextDecoder, stochastic_depth
 from pr_pilot.runtime.dataset_adapter import ComplexTensorSample, PolymerGraph
 from pr_pilot.runtime.gemmi_adapter import P_ATOMS, R_ATOMS, feature_dimensions
 from pr_pilot.training.corruption import curriculum_bounds, generate_corruption
@@ -104,3 +104,14 @@ def test_stochastic_depth_is_identity_in_eval_and_zero_at_probability_one():
     x = torch.randn(4, 8)
     assert torch.equal(stochastic_depth(x, 0.5, training=False), x)
     assert torch.count_nonzero(stochastic_depth(x, 1.0, training=True)) == 0
+
+
+def test_sparse_reductions_support_bfloat16_autocast():
+    graph = _graph(n=4, node_dim=3, edge_dim=2)
+    encoder = SimpleSparseBackboneEncoder(node_in=3, edge_in=2, hidden=8, layers=1)
+    decoder = SparseSequenceContextDecoder(alphabet=4, edge_in=2, hidden=8, layers=1)
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        encoded = encoder(graph.node_x, graph.edge_index, graph.edge_x)
+        decoded = decoder(encoded, graph.edge_index, graph.edge_x, graph.sequence, graph.valid)
+    assert encoded.dtype in {torch.float32, torch.bfloat16}
+    assert decoded.shape == (4, 8)

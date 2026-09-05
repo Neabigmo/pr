@@ -95,6 +95,9 @@ python -m pr_pilot.cli screen --kind complex `
 Rfam 标签异常偏少；代码已修复为读取查询名称列，并在合并全部 1,095 个复杂体
 后完成全量重注释。
 
+另外，首次 GPU smoke 发现并修复了 bf16 autocast 下稀疏消息聚合的 dtype 不一致；
+修复后 CPU autocast 回归测试和 CUDA/bf16 六阶段真实结构 smoke 均通过。
+
 ## 逐条进度与日志
 
 每处理完一条 manifest 记录，筛选器立即向 `*_progress.jsonl` 写入一条
