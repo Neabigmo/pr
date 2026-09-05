@@ -4,17 +4,31 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  # Explicitly exercise the post-Node20 runtime path. The pinned major versions
+  # below already use Node24, but keeping this flag makes accidental addition of
+  # an older JavaScript action fail early during the migration window.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # checkout@v6 and setup-python@v6 use the Node24 action runtime.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          cache: pip
       - name: Install
-        run: pip install -e '.[dev]'
+        run: python -m pip install -e '.[dev]'
       - name: Unit tests
-        run: pytest
+        run: python -m pytest
       - name: Ruff
         run: ruff check src tests
