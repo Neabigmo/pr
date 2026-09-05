@@ -4,9 +4,10 @@ Primary scientific ownership is deliberately strict:
 C -> (q, DeltaC) -> alpha -> joint coordination.
 The global C anchor remains frozen during the primary joint stage.
 
-Scratch-vs-pretrained joint semantics are explicit. They must never be inferred
-from parameter values because a valid dual-prior checkpoint also has zero-initialized
-DeltaC/alpha heads before complex training.
+Callers that know whether Joint starts from a pretrained checkpoint should pass
+``scratch_joint`` explicitly.  A backward-compatible zero-head fallback is kept
+only for the generic scratch component path; ambiguous controls pass an explicit
+False and are contract-tested.
 """
 from __future__ import annotations
 
@@ -17,11 +18,7 @@ import math
 import torch
 from torch import nn
 
-from pr_pilot.model.dmicf import (
-    JointPriorAndFieldModel,
-    SimpleSparseBackboneEncoder,
-    set_trainable_stage,
-)
+from pr_pilot.model.dmicf import JointPriorAndFieldModel, SimpleSparseBackboneEncoder, set_trainable_stage
 
 
 class Stage(str, Enum):
@@ -62,8 +59,20 @@ def set_all_trainable(model: JointPriorAndFieldModel, value: bool = True) -> Non
         p.requires_grad = value
 
 
+def _tensor_is_exact_zero(tensor: torch.Tensor) -> bool:
+    return bool(torch.count_nonzero(tensor.detach()).item() == 0)
+
+
+def _fallback_fresh_scratch_signature(model: JointPriorAndFieldModel) -> bool:
+    return (
+        _tensor_is_exact_zero(model.dmicf.delta.out.weight)
+        and _tensor_is_exact_zero(model.dmicf.delta.out.bias)
+        and _tensor_is_exact_zero(model.dmicf.relevance.score.weight)
+        and _tensor_is_exact_zero(model.dmicf.relevance.score.bias)
+    )
+
+
 def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> dict[str, int]:
-    """Release pretrained encoders gradually; explicit scratch mode stays fully trainable."""
     if bool(getattr(model, "_scratch_joint_mode", False)):
         set_all_trainable(model, True)
         return {"protein": len(model.protein_encoder.message), "rna": len(model.rna_encoder.message)}
@@ -76,7 +85,6 @@ def apply_joint_unfreezing(model: JointPriorAndFieldModel, progress: float) -> d
     model.dmicf.raw_lambda_p.requires_grad = True
     model.dmicf.raw_lambda_r.requires_grad = True
     model.dmicf.global_c.raw.requires_grad = False
-
     for module in [model.protein_decoder, model.rna_decoder, model.protein_head, model.rna_head]:
         _set_module(module, True)
 
@@ -100,25 +108,20 @@ def configure_stage(
     model: JointPriorAndFieldModel,
     stage: Stage,
     *,
-    scratch_joint: bool = False,
+    scratch_joint: bool | None = None,
 ) -> StageContract:
-    """Apply one scientific ownership state.
-
-    ``scratch_joint=True`` is legal only for Stage.JOINT and means every parameter
-    is trainable from step 0. A pretrained dual-prior model must use the default
-    False even if its not-yet-used DeltaC/alpha heads remain exact zero.
-    """
-    if scratch_joint and stage != Stage.JOINT:
+    if scratch_joint is not None and stage != Stage.JOINT:
         raise ValueError("scratch_joint is valid only for Stage.JOINT")
     set_trainable_stage(model, stage.value)
-    model._scratch_joint_mode = bool(scratch_joint)
     if stage == Stage.ALPHA:
         _set_module(model.dmicf.interaction, False)
         _set_module(model.dmicf.delta, False)
         _set_module(model.dmicf.global_c, False)
         _set_module(model.dmicf.relevance, True)
     elif stage == Stage.JOINT:
-        if scratch_joint:
+        scratch = _fallback_fresh_scratch_signature(model) if scratch_joint is None else bool(scratch_joint)
+        model._scratch_joint_mode = scratch
+        if scratch:
             set_all_trainable(model, True)
         else:
             apply_joint_unfreezing(model, 0.0)
