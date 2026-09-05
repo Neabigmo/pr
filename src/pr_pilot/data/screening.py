@@ -1,10 +1,9 @@
 """Audited screening wrapper.
 
-The legacy coordinate parser remains in ``screening_legacy.py``.  This wrapper
-adds postconditions that were missing from the original complex path: the same
-individual Protein/RNA maximum lengths used for the single-polymer pools must also
-hold for a complex mother sample.  Screening and runtime continue to share the
-6-A full-heavy-atom biological-interface concept.
+Adds v3 postconditions to the legacy coordinate parser:
+- complex individual Protein/RNA maximum lengths are enforced;
+- an unrecognized CCD component annotated by Gemmi as a polymer residue is fatal
+  instead of being silently skipped and shortening the supervised sequence.
 """
 from __future__ import annotations
 
@@ -12,10 +11,29 @@ from pathlib import Path
 from typing import Literal
 import json
 
+import gemmi
 import pandas as pd
 
 from pr_pilot.data import screening_legacy as _legacy
+from pr_pilot.data.residue_vocab import classify_residue
 from pr_pilot.data.screening_legacy import *  # noqa: F401,F403
+
+
+def _unknown_polymer_components(path: Path) -> list[str]:
+    try:
+        _, _, _, structure = _legacy._metadata(path)
+    except Exception:
+        return []
+    if len(structure) == 0:
+        return []
+    bad: list[str] = []
+    for chain in structure[0]:
+        for residue in chain:
+            cls = classify_residue(residue.name)
+            entity_type = getattr(residue, "entity_type", None)
+            if cls.polymer == "other" and entity_type == gemmi.EntityType.Polymer:
+                bad.append(f"{chain.name}:{residue.seqid}:{residue.name}")
+    return bad
 
 
 def screen_file(
@@ -23,6 +41,10 @@ def screen_file(
     kind: Literal["protein", "rna", "complex"],
     cfg: ScreenConfig,  # noqa: F405
 ) -> tuple[dict | None, str]:
+    unknown = _unknown_polymer_components(path)
+    if unknown:
+        return None, f"unknown_polymer_component:{unknown[0]}"
+
     record, reason = _legacy.screen_file(path, kind, cfg)
     if record is None or kind != "complex":
         return record, reason
@@ -63,6 +85,7 @@ def screen_download_manifest(
         "rejected": len(rej_df),
         "rejection_counts": rej_df["reason"].value_counts().to_dict() if len(rej_df) else {},
         "complex_individual_length_limits_enforced": kind == "complex",
+        "unknown_polymer_components_rejected": True,
     }
     (out_dir / f"{kind}_screen_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"

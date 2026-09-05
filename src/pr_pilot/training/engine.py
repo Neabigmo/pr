@@ -3,7 +3,8 @@
 The v3 orchestration implementation is in ``engine_v3_core.py`` and low-level
 legacy tensor/corruption helpers are in ``engine_legacy.py``. This shim binds the
 canonical full-heavy-atom interface cutoff from the resolved config into every
-adapter construction, including legacy validation helpers.
+adapter construction, including legacy validation helpers, while preserving
+low-level helper imports used by the scientific contract tests.
 """
 from __future__ import annotations
 
@@ -39,6 +40,9 @@ _one_training_loss = _core._one_training_loss
 _move_graph = _core._move_graph
 _move_complex = _core._move_complex
 _all_interface_corruption = _core._all_interface_corruption
+_drop_intra_edges = _core._legacy._drop_intra_edges
+_drop_pr_edges = _core._legacy._drop_pr_edges
+_augment_graphs = _core._legacy._augment_graphs
 sequential_joint_normalized_nll = _core.sequential_joint_normalized_nll
 validate_stage = _core.validate_stage
 train_stage = _core.train_stage
@@ -52,6 +56,9 @@ __all__ = [
     "_move_graph",
     "_move_complex",
     "_all_interface_corruption",
+    "_drop_intra_edges",
+    "_drop_pr_edges",
+    "_augment_graphs",
     "sequential_joint_normalized_nll",
     "validate_stage",
     "train_stage",
