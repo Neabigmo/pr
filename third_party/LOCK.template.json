@@ -1,0 +1,22 @@
+{
+  "proteinmpnn": {
+    "name": "ProteinMPNN",
+    "repository": "https://github.com/dauparas/ProteinMPNN",
+    "commit": "REPLACE_WITH_IMMUTABLE_SHA_BEFORE_RUNNING",
+    "checkout": "third_party/proteinmpnn",
+    "use_published_pretrained_weights_in_primary_baseline": false
+  },
+  "rna_fixbb": {
+    "name": "MPNN-fixbb / NA-MPNN",
+    "repository": "https://github.com/baker-laboratory/NA-MPNN",
+    "commit": "REPLACE_WITH_IMMUTABLE_SHA_BEFORE_RUNNING",
+    "checkout": "third_party/na_mpnn",
+    "use_published_pretrained_weights_in_primary_baseline": false
+  },
+  "rules": [
+    "Copy this file to third_party/LOCK.json before the first reported run.",
+    "Never update an upstream checkout without updating the lock and starting a new experiment version.",
+    "Record exact upstream train/inference commands in artifacts.",
+    "Primary small-data comparison is from random initialization; published weights may be a separate secondary baseline only."
+  ]
+}
