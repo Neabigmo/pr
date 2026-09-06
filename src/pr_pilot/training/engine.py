@@ -13,6 +13,8 @@ Scientific invariants implemented here:
 """
 from __future__ import annotations
 
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 import hashlib
@@ -178,6 +180,44 @@ def _joint_unfreezing_mode(cfg: dict) -> str:
     return mode
 
 
+def _load_training_sample(adapter: GemmiStructureAdapter, stage: Stage, row):
+    if stage == Stage.PROTEIN_PRIOR:
+        return load_protein_row(adapter, row)
+    if stage == Stage.RNA_PRIOR:
+        return load_rna_row(adapter, row)
+    return load_complex_row(adapter, row)
+
+
+def _prefetch_training_samples(rows: list, adapter: GemmiStructureAdapter, stage: Stage, workers: int):
+    """Yield rows with bounded CPU-side preparation ahead of model execution.
+
+    The model still receives one variable-size graph at a time, so this does not
+    change optimizer steps, batching semantics, data order, or metrics.  It only
+    overlaps structure parsing/graph construction with the previous GPU step.
+    """
+    workers = max(0, int(workers))
+    if workers == 0:
+        for row in rows:
+            yield row, _load_training_sample(adapter, stage, row)
+        return
+
+    pending = deque()
+    row_iter = iter(rows)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="structure-prefetch") as pool:
+        for _ in range(min(len(rows), workers * 2)):
+            row = next(row_iter, None)
+            if row is None:
+                break
+            pending.append((row, pool.submit(_load_training_sample, adapter, stage, row)))
+        while pending:
+            row, future = pending.popleft()
+            prepared = future.result()
+            next_row = next(row_iter, None)
+            if next_row is not None:
+                pending.append((next_row, pool.submit(_load_training_sample, adapter, stage, next_row)))
+            yield row, prepared
+
+
 def _all_interface_corruption(graph: PolymerGraph) -> tuple[Tensor, Tensor, Tensor]:
     target = graph.interface & graph.valid & ~graph.fixed
     if not target.any():
@@ -265,12 +305,13 @@ def _one_training_loss(
     epoch: int,
     progress: float,
     device: torch.device,
+    prepared=None,
 ) -> tuple[Tensor, dict]:
     seed = int(cfg["experiment"]["pilot_seed"])
     mcfg, lcfg = cfg["masking"], cfg["loss"]
 
     if stage == Stage.PROTEIN_PRIOR:
-        graph = _move_graph(load_protein_row(adapter, row), device)
+        graph = _move_graph(prepared if prepared is not None else load_protein_row(adapter, row), device)
         _augment_graphs(graph, cfg, stage, row.sample_id, epoch)
         corruption = _corrupt(graph, 20, row, epoch, seed, cfg, progress)
         logits, _ = model.protein_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, corruption.input_tokens, corruption.known)
@@ -278,14 +319,14 @@ def _one_training_loss(
         return breakdown.total, {**breakdown.detached_scalars(), "mask_fraction": corruption.sampled_fraction, "mask_mode": corruption.mode}
 
     if stage == Stage.RNA_PRIOR:
-        graph = _move_graph(load_rna_row(adapter, row), device)
+        graph = _move_graph(prepared if prepared is not None else load_rna_row(adapter, row), device)
         _augment_graphs(graph, cfg, stage, row.sample_id, epoch)
         corruption = _corrupt(graph, 4, row, epoch, seed, cfg, progress)
         logits, _ = model.rna_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, corruption.input_tokens, corruption.known)
         breakdown = balanced_sequence_loss(None, None, None, None, logits, graph.sequence, corruption.target_mask, graph.interface, "rna", 0.0, float(lcfg["rna_label_smoothing"]))
         return breakdown.total, {**breakdown.detached_scalars(), "mask_fraction": corruption.sampled_fraction, "mask_mode": corruption.mode}
 
-    sample = _move_complex(load_complex_row(adapter, row), device)
+    sample = _move_complex(prepared if prepared is not None else load_complex_row(adapter, row), device)
     _augment_graphs(sample, cfg, stage, row.sample_id, epoch)
 
     if stage in {Stage.GLOBAL_C, Stage.DELTA_C, Stage.ALPHA}:
@@ -427,20 +468,21 @@ def validate_stage(model: JointPriorAndFieldModel, stage: Stage, manifest: Manif
     model.eval()
     adapter = _adapter(cfg, 0, training=False)
     rows = list(manifest.rows())
+    workers = int(cfg.get("optimization", {}).get("data_workers", 0))
     if not rows:
         raise ValueError("Empty validation manifest")
 
     if stage in {Stage.PROTEIN_PRIOR, Stage.RNA_PRIOR}:
         values = []
-        for row in rows:
+        for row, graph in _prefetch_training_samples(rows, adapter, stage, workers):
             with _autocast(cfg, device):
                 if stage == Stage.PROTEIN_PRIOR:
-                    graph = _move_graph(load_protein_row(adapter, row), device)
+                    graph = _move_graph(graph, device)
                     known = graph.fixed & graph.valid
                     logits, _ = model.protein_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, graph.sequence, known)
                     b = balanced_sequence_loss(logits, graph.sequence, graph.valid & ~graph.fixed, graph.interface, None, None, None, None, "protein", 0.0, 0.0)
                 else:
-                    graph = _move_graph(load_rna_row(adapter, row), device)
+                    graph = _move_graph(graph, device)
                     known = graph.fixed & graph.valid
                     logits, _ = model.rna_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, graph.sequence, known)
                     b = balanced_sequence_loss(None, None, None, None, logits, graph.sequence, graph.valid & ~graph.fixed, graph.interface, "rna", 0.0, 0.0)
@@ -452,9 +494,9 @@ def validate_stage(model: JointPriorAndFieldModel, stage: Stage, manifest: Manif
     seed = int(cfg["experiment"]["pilot_seed"])
     joint_ids = {row.sample_id for row in sorted(rows, key=lambda x: _stable_seed(seed, x.sample_id, "joint-validation-subset"))[:joint_limit]}
 
-    for row in rows:
+    for row, sample in _prefetch_training_samples(rows, adapter, stage, workers):
         with _autocast(cfg, device):
-            sample = _move_complex(load_complex_row(adapter, row), device)
+            sample = _move_complex(sample, device)
             ptok, pknown, pmask = _all_interface_corruption(sample.protein)
             rtok, rknown, rmask = _all_interface_corruption(sample.rna)
             use_delta, learned_alpha = _stage_flags(stage)
@@ -510,10 +552,11 @@ def train_stage(cfg: dict, stage: Stage, train_manifest: Path, val_manifest: Pat
         if stage == Stage.JOINT and joint_mode == "gradual": apply_joint_unfreezing(model, progress)
         adapter = _adapter(cfg, epoch, training=True)
         rows = list(train_table.rows()); random.Random(seed + epoch * 104729).shuffle(rows)
+        workers = int(optcfg.get("data_workers", 0))
         running = []; mask_fractions = []; hard_count = 0; task_counts: dict[str, int] = {}
-        for row in rows:
+        for row, prepared in _prefetch_training_samples(rows, adapter, stage, workers):
             optimizer.zero_grad(set_to_none=True)
-            with _autocast(cfg, dev): loss, detail = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev)
+            with _autocast(cfg, dev): loss, detail = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev, prepared)
             if not torch.isfinite(loss): raise FloatingPointError(f"Non-finite loss at {stage.value} epoch={epoch} sample={row.sample_id}")
             loss.backward()
             torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad and p.grad is not None], float(optcfg["grad_clip_norm"]))

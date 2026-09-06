@@ -92,6 +92,8 @@ optimization:
   warmup_fraction: 0.04
   grad_clip_norm: 1.0
   precision: bf16
+  # CPU-side structure prefetch workers; zero preserves the serial reference path.
+  data_workers: 0
   layerwise_lr_decay: 0.85
   early_stopping_patience: 15
   max_epochs_default: 100
