@@ -226,7 +226,81 @@ def _load_training_sample_in_process(payload: tuple):
             rich_pr_geometry=adapter_spec[6],
         )
         _PROCESS_ADAPTER_SPEC = adapter_spec
-    return _load_training_sample(_PROCESS_ADAPTER, Stage(stage_value), row)
+    return _prefetch_numpy(_load_training_sample(_PROCESS_ADAPTER, Stage(stage_value), row))
+
+
+def _prefetch_numpy(value):
+    """Convert a CPU graph to NumPy before crossing a process boundary.
+
+    PyTorch's multiprocessing reducer may transfer each tensor through shared
+    memory/file descriptors.  A bounded queue of variable-size graphs can then
+    stall behind those transfers.  Plain NumPy buffers use ordinary bounded
+    pickle payloads and are restored to CPU tensors in the consumer process.
+    """
+    fields = [
+        "node_x",
+        "edge_index",
+        "edge_x",
+        "sequence",
+        "interface",
+        "valid",
+        "fixed",
+        "reference_xyz",
+        "chain_index",
+    ]
+
+    def graph_to_numpy(graph: PolymerGraph) -> PolymerGraph:
+        for name in fields:
+            setattr(graph, name, getattr(graph, name).detach().cpu().numpy())
+        return graph
+
+    if isinstance(value, PolymerGraph):
+        return graph_to_numpy(value)
+    value.protein = graph_to_numpy(value.protein)
+    value.rna = graph_to_numpy(value.rna)
+    value.pr = PRBatch(
+        value.pr.protein_index.detach().cpu().numpy(),
+        value.pr.rna_index.detach().cpu().numpy(),
+        value.pr.edge_features.detach().cpu().numpy(),
+        value.pr.effective_distance.detach().cpu().numpy(),
+        None if value.pr.edge_batch is None else value.pr.edge_batch.detach().cpu().numpy(),
+    )
+    return value
+
+
+def _restore_prefetched_tensors(value):
+    """Restore NumPy-backed process results to CPU tensors in the trainer."""
+    fields = [
+        "node_x",
+        "edge_index",
+        "edge_x",
+        "sequence",
+        "interface",
+        "valid",
+        "fixed",
+        "reference_xyz",
+        "chain_index",
+    ]
+
+    def graph_to_tensors(graph: PolymerGraph) -> PolymerGraph:
+        for name in fields:
+            tensor = getattr(graph, name)
+            if not torch.is_tensor(tensor):
+                setattr(graph, name, torch.from_numpy(tensor))
+        return graph
+
+    if isinstance(value, PolymerGraph):
+        return graph_to_tensors(value)
+    value.protein = graph_to_tensors(value.protein)
+    value.rna = graph_to_tensors(value.rna)
+    value.pr = PRBatch(
+        torch.from_numpy(value.pr.protein_index) if not torch.is_tensor(value.pr.protein_index) else value.pr.protein_index,
+        torch.from_numpy(value.pr.rna_index) if not torch.is_tensor(value.pr.rna_index) else value.pr.rna_index,
+        torch.from_numpy(value.pr.edge_features) if not torch.is_tensor(value.pr.edge_features) else value.pr.edge_features,
+        torch.from_numpy(value.pr.effective_distance) if not torch.is_tensor(value.pr.effective_distance) else value.pr.effective_distance,
+        None if value.pr.edge_batch is None else (torch.from_numpy(value.pr.edge_batch) if not torch.is_tensor(value.pr.edge_batch) else value.pr.edge_batch),
+    )
+    return value
 
 
 def _prefetch_training_samples(
@@ -284,6 +358,8 @@ def _prefetch_training_samples(
         while pending:
             row, future = pending.popleft()
             prepared = future.result()
+            if backend == "process":
+                prepared = _restore_prefetched_tensors(prepared)
             next_row = next(row_iter, None)
             if next_row is not None:
                 pending.append((next_row, submit(make_item(next_row))))
