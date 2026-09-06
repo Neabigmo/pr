@@ -22,6 +22,7 @@ import hashlib
 import json
 import math
 import random
+import time
 
 import numpy as np
 import torch
@@ -703,7 +704,7 @@ def train_stage(cfg: dict, stage: Stage, train_manifest: Path, val_manifest: Pat
     train_table = ManifestTable(train_manifest); val_table = ManifestTable(val_manifest)
     max_epochs = int(cfg["training_stages"][stage.value].get("max_epochs", cfg["optimization"].get("max_epochs_default", 100)))
     patience = int(optcfg["early_stopping_patience"]); total_steps = max_epochs * max(1, len(train_table))
-    out_dir.mkdir(parents=True, exist_ok=True); metrics_path = out_dir / "metrics.jsonl"; best_path = out_dir / "best.pt"
+    out_dir.mkdir(parents=True, exist_ok=True); metrics_path = out_dir / "metrics.jsonl"; progress_path = out_dir / "progress.jsonl"; best_path = out_dir / "best.pt"
     best = float("inf"); bad_epochs = 0; global_step = 0
     workers = int(optcfg.get("data_workers", 0))
     backend = str(optcfg.get("data_prefetch_backend", "thread"))
@@ -713,6 +714,8 @@ def train_stage(cfg: dict, stage: Stage, train_manifest: Path, val_manifest: Pat
         # interpreter processes every epoch would erase much of the gain.
         process_pool = ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn"))
 
+    stage_started = time.perf_counter()
+    progress_handle = progress_path.open("a", encoding="utf-8")
     try:
         for epoch in range(max_epochs):
             model.train(); progress = epoch / max(1, max_epochs - 1)
@@ -720,7 +723,7 @@ def train_stage(cfg: dict, stage: Stage, train_manifest: Path, val_manifest: Pat
             adapter = _adapter(cfg, epoch, training=True)
             rows = list(train_table.rows()); random.Random(seed + epoch * 104729).shuffle(rows)
             running = []; mask_fractions = []; hard_count = 0; task_counts: dict[str, int] = {}
-            for row, prepared in _prefetch_training_samples(rows, adapter, stage, workers, process_pool, backend):
+            for sample_index, (row, prepared) in enumerate(_prefetch_training_samples(rows, adapter, stage, workers, process_pool, backend), start=1):
                 optimizer.zero_grad(set_to_none=True)
                 with _autocast(cfg, dev): loss, detail = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev, prepared)
                 if not torch.isfinite(loss): raise FloatingPointError(f"Non-finite loss at {stage.value} epoch={epoch} sample={row.sample_id}")
@@ -732,6 +735,19 @@ def train_stage(cfg: dict, stage: Stage, train_manifest: Path, val_manifest: Pat
                 if "mask_fraction" in detail: mask_fractions.append(float(detail["mask_fraction"]))
                 if detail.get("hard_context"): hard_count += 1
                 if "task" in detail: task_counts[str(detail["task"])] = task_counts.get(str(detail["task"]), 0) + 1
+                progress_handle.write(json.dumps({
+                    "event": "sample_completed",
+                    "stage": stage.value,
+                    "epoch": epoch,
+                    "sample_index": sample_index,
+                    "total_samples": len(rows),
+                    "sample_id": row.sample_id,
+                    "loss": float(loss.detach().cpu()),
+                    "elapsed_seconds": time.perf_counter() - stage_started,
+                }, sort_keys=True) + "\n")
+                progress_handle.flush()
+                if sample_index == 1 or sample_index % 10 == 0 or sample_index == len(rows):
+                    print(f"[progress] stage={stage.value} epoch={epoch + 1}/{max_epochs} sample={sample_index}/{len(rows)} loss={float(loss.detach().cpu()):.6f}", flush=True)
 
             val = validate_stage(model, stage, val_table, cfg, dev, process_pool)
             record = {"stage": stage.value, "epoch": epoch, "train_loss": float(np.mean(running)), "val_metric": val, "mean_mask_fraction": float(np.mean(mask_fractions)) if mask_fractions else None, "hard_context_samples": hard_count, "task_counts": task_counts, "joint_unfreezing_mode": joint_mode, "trainable": trainable_parameter_report(model), "precision": "bf16" if dev.type == "cuda" and str(optcfg.get("precision", "")).lower() == "bf16" and torch.cuda.is_bf16_supported() else "fp32"}
@@ -745,5 +761,6 @@ def train_stage(cfg: dict, stage: Stage, train_manifest: Path, val_manifest: Pat
     finally:
         if process_pool is not None:
             process_pool.shutdown(wait=True)
+        progress_handle.close()
     if not best_path.exists(): raise RuntimeError("No checkpoint was saved")
     return best_path
