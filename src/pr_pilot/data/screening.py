@@ -7,15 +7,19 @@ and later be silently shortened by the tensor adapter.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import hashlib
 import json
 import math
+from time import perf_counter
 from typing import Literal
 
 import gemmi
 import numpy as np
 import pandas as pd
+from scipy.spatial import cKDTree
+from tqdm.auto import tqdm
 
 from pr_pilot.data.residue_vocab import classify_residue
 
@@ -40,6 +44,7 @@ class ScreenConfig:
     max_total_tokens: int = 1000
     max_resolution_angstrom: float = 4.0
     allow_nmr_without_resolution: bool = True
+    apply_resolution_method_filter: bool = True
     interface_contact_angstrom: float = 6.0
     min_interfacial_residue_pairs: int = 3
     max_interface_missing_fraction: float = 0.10
@@ -84,7 +89,7 @@ def _block_value(block: gemmi.cif.Block, tag: str) -> str:
     return "" if value in {"?", "."} else value
 
 
-def _metadata(path: Path) -> tuple[str, str, float | None, gemmi.Structure]:
+def _metadata_header(path: Path) -> tuple[str, str, float | None, gemmi.cif.Block]:
     doc = gemmi.cif.read_file(str(path))
     block = doc.sole_block()
     title = " ".join(
@@ -109,8 +114,13 @@ def _metadata(path: Path) -> tuple[str, str, float | None, gemmi.Structure]:
         if vals:
             resolution = min(vals)
             break
-    structure = gemmi.make_structure_from_block(block)
-    return title, method, resolution, structure
+    return title, method, resolution, block
+
+
+def _metadata(path: Path) -> tuple[str, str, float | None, gemmi.Structure]:
+    """Read metadata and materialize coordinates for callers needing a structure."""
+    title, method, resolution, block = _metadata_header(path)
+    return title, method, resolution, gemmi.make_structure_from_block(block)
 
 
 def _heavy_xyz(residue: gemmi.Residue) -> tuple[set[str], np.ndarray]:
@@ -187,14 +197,54 @@ def _min_distance(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _interface_pairs(proteins: list[ChainRecord], rnas: list[ChainRecord], cutoff: float):
+    """Return contacting residue pairs using an exact spatial-indexed search.
+
+    The KD-tree is only a broad phase. Every candidate residue pair is sent
+    through the original ``_min_distance`` calculation, so the returned pairs
+    and distances retain the previous screening semantics.
+    """
+    protein_residues = [residue for chain in proteins for residue in chain.residues]
+    rna_residues = [residue for chain in rnas for residue in chain.residues]
+    protein_points: list[np.ndarray] = []
+    protein_residue_ids: list[int] = []
+    rna_points: list[np.ndarray] = []
+    rna_residue_ids: list[int] = []
+    for residue_id, residue in enumerate(protein_residues):
+        for point in residue.heavy_xyz:
+            protein_points.append(point)
+            protein_residue_ids.append(residue_id)
+    for residue_id, residue in enumerate(rna_residues):
+        for point in residue.heavy_xyz:
+            rna_points.append(point)
+            rna_residue_ids.append(residue_id)
+    if not protein_points or not rna_points:
+        return []
+
+    protein_xyz = np.asarray(protein_points, dtype=np.float32)
+    rna_xyz = np.asarray(rna_points, dtype=np.float32)
+    tree = cKDTree(rna_xyz)
+    # Include the next representable radius as a conservative broad phase;
+    # the original float32 distance test remains the final authority.
+    search_cutoff = float(np.nextafter(float(cutoff), float("inf")))
+    candidate_pairs: set[tuple[int, int]] = set()
+    chunk_size = 8192
+    for start in range(0, len(protein_xyz), chunk_size):
+        stop = min(start + chunk_size, len(protein_xyz))
+        neighbours = tree.query_ball_point(protein_xyz[start:stop], search_cutoff, eps=0.0)
+        for offset, rna_atom_ids in enumerate(neighbours):
+            protein_residue_id = protein_residue_ids[start + offset]
+            candidate_pairs.update(
+                (protein_residue_id, rna_residue_ids[rna_atom_id])
+                for rna_atom_id in rna_atom_ids
+            )
+
     pairs: list[tuple[ResidueRecord, ResidueRecord, float]] = []
-    for pc in proteins:
-        for rc in rnas:
-            for pr in pc.residues:
-                for rr in rc.residues:
-                    d = _min_distance(pr.heavy_xyz, rr.heavy_xyz)
-                    if d <= cutoff:
-                        pairs.append((pr, rr, d))
+    for protein_residue_id, rna_residue_id in sorted(candidate_pairs):
+        protein_residue = protein_residues[protein_residue_id]
+        rna_residue = rna_residues[rna_residue_id]
+        distance = _min_distance(protein_residue.heavy_xyz, rna_residue.heavy_xyz)
+        if distance <= cutoff:
+            pairs.append((protein_residue, rna_residue, distance))
     return pairs
 
 
@@ -235,11 +285,22 @@ def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: Scr
     """Return ``(eligible_record, rejection_reason)`` for one coordinate file."""
     pdb_id = path.name.split("-")[0].split(".")[0].upper()
     try:
-        title, method, resolution, structure = _metadata(path)
+        title, method, resolution, block = _metadata_header(path)
     except Exception as exc:
         return None, f"parse_error:{type(exc).__name__}"
-    if not _passes_resolution(method, resolution, cfg):
+    if cfg.apply_resolution_method_filter and not _passes_resolution(method, resolution, cfg):
         return None, "resolution_or_method"
+    if kind == "complex" and cfg.exclude_large_rnp_keywords and any(
+        keyword in title.lower() for keyword in EXCLUDE_COMPLEX_KEYWORDS
+    ):
+        return None, "excluded_large_RNP_keyword"
+    try:
+        # Use the same file parser as the runtime adapter.  Gemmi's block
+        # materializer can omit unsupported polymer residues, which would let
+        # screening accept a chain that later fails during training.
+        structure = gemmi.read_structure(str(path))
+    except Exception as exc:
+        return None, f"parse_error:{type(exc).__name__}"
     proteins, rnas, has_dna, has_unsupported = _chains(structure)
     if has_dna:
         return None, "contains_DNA"
@@ -303,8 +364,6 @@ def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: Scr
 
     if kind != "complex":
         raise ValueError(kind)
-    if cfg.exclude_large_rnp_keywords and any(k in title.lower() for k in EXCLUDE_COMPLEX_KEYWORDS):
-        return None, "excluded_large_RNP_keyword"
     if not proteins or not rnas:
         return None, "missing_polymer_partner"
     pairs = _interface_pairs(proteins, rnas, cfg.interface_contact_angstrom)
@@ -355,18 +414,79 @@ def screen_download_manifest(
     kind: Literal["protein", "rna", "complex"],
     out_dir: Path,
     cfg: ScreenConfig,
+    *,
+    progress_log: Path | None = None,
+    progress_label: str | None = None,
+    show_progress: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Screen every downloaded file and persist eligible/rejected tables."""
     downloads = pd.read_csv(download_manifest, sep="\t")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    progress_log = progress_log or out_dir / f"{kind}_progress.jsonl"
+    progress_log.parent.mkdir(parents=True, exist_ok=True)
     eligible: list[dict] = []
     rejected: list[dict] = []
-    for row in downloads.itertuples(index=False):
-        record, reason = screen_file(Path(row.path), kind, cfg)
-        if record is None:
-            rejected.append({"pdb_id": row.pdb_id, "path": row.path, "reason": reason})
-        else:
-            eligible.append(record)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    rows = downloads.itertuples(index=False)
+    if show_progress:
+        rows = tqdm(
+            rows,
+            total=len(downloads),
+            desc=progress_label or f"screen {kind}",
+            unit="sample",
+            dynamic_ncols=True,
+        )
+    with progress_log.open("w", encoding="utf-8") as log_handle:
+        for completed_index, row in enumerate(rows, start=1):
+            started = perf_counter()
+            try:
+                record, reason = screen_file(Path(row.path), kind, cfg)
+            except Exception as exc:
+                log_handle.write(
+                    json.dumps(
+                        {
+                            "event": "record_error",
+                            "kind": kind,
+                            "index": completed_index,
+                            "total": len(downloads),
+                            "pdb_id": str(row.pdb_id),
+                            "path": str(row.path),
+                            "status": "error",
+                            "reason": f"{type(exc).__name__}: {exc}",
+                            "elapsed_seconds": perf_counter() - started,
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                log_handle.flush()
+                raise
+            if record is None:
+                rejected.append({"pdb_id": row.pdb_id, "path": row.path, "reason": reason})
+                status = "rejected"
+            else:
+                eligible.append(record)
+                status = "eligible"
+            log_handle.write(
+                json.dumps(
+                    {
+                        "event": "record_complete",
+                        "kind": kind,
+                        "index": completed_index,
+                        "total": len(downloads),
+                        "pdb_id": str(row.pdb_id),
+                        "path": str(row.path),
+                        "status": status,
+                        "reason": reason,
+                        "sample_id": record.get("sample_id") if record is not None else None,
+                        "elapsed_seconds": perf_counter() - started,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            log_handle.flush()
     elig_df = pd.DataFrame(eligible)
     rej_df = pd.DataFrame(rejected)
     elig_df.to_csv(out_dir / f"{kind}_eligible.tsv", sep="\t", index=False)
@@ -378,6 +498,8 @@ def screen_download_manifest(
         "eligible": len(elig_df),
         "rejected": len(rej_df),
         "rejection_counts": rej_df["reason"].value_counts().to_dict() if len(rej_df) else {},
+        "progress_log": str(progress_log),
+        "progress_records": len(downloads),
     }
     (out_dir / f"{kind}_screen_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return elig_df, rej_df

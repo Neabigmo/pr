@@ -116,20 +116,20 @@ def _rows_from_logits(
         i = int(idx)
         n = int(native[i])
         p = int(pred[i])
-        rows.append(
-            {
-                "sample_id": sample_id,
-                "polymer": polymer,
-                "position": i,
-                "native_token": n,
-                "predicted_token": p,
-                "native_log_probability": float(logp[i, n].cpu()),
-                "max_probability": float(prob[i].max().cpu()),
-                "is_interface": bool(interface[i]),
-                "model": model_name,
-                "seed": seed,
-            }
-        )
+        row = {
+            "sample_id": sample_id,
+            "polymer": polymer,
+            "position": i,
+            "native_token": n,
+            "predicted_token": p,
+            "native_log_probability": float(logp[i, n].cpu()),
+            "max_probability": float(prob[i].max().cpu()),
+            "is_interface": bool(interface[i]),
+            "model": model_name,
+            "seed": seed,
+        }
+        row.update({f"probability_{j}": float(value.cpu()) for j, value in enumerate(prob[i])})
+        rows.append(row)
     return rows
 
 
@@ -226,24 +226,25 @@ def score_joint_teacher_forced(
             out = _forward(model, sample, pt, rt, pk, rk)
             logits = out["protein_logits"][i] if polymer == "protein" else out["rna_logits"][i]
             logp = F.log_softmax(logits.float(), -1)
+            prob = logp.exp()
             native = int(pt[i] if polymer == "protein" else rt[i])
             pred = int(logits.argmax())
             interface = bool(sample.protein.interface[i] if polymer == "protein" else sample.rna.interface[i])
-            rows.append(
-                {
-                    "sample_id": sample.sample_id,
-                    "polymer": polymer,
-                    "position": i,
-                    "order": order_idx,
-                    "native_token": native,
-                    "predicted_token": pred,
-                    "native_log_probability": float(logp[native].cpu()),
-                    "max_probability": float(logp.exp().max().cpu()),
-                    "is_interface": interface,
-                    "model": model_name,
-                    "seed": seed,
-                }
-            )
+            row = {
+                "sample_id": sample.sample_id,
+                "polymer": polymer,
+                "position": i,
+                "order": order_idx,
+                "native_token": native,
+                "predicted_token": pred,
+                "native_log_probability": float(logp[native].cpu()),
+                "max_probability": float(prob.max().cpu()),
+                "is_interface": interface,
+                "model": model_name,
+                "seed": seed,
+            }
+            row.update({f"probability_{j}": float(value.cpu()) for j, value in enumerate(prob)})
+            rows.append(row)
             if polymer == "protein":
                 pk[i] = True
             else:
