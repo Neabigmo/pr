@@ -94,6 +94,8 @@ optimization:
   precision: bf16
   # CPU-side structure prefetch workers; zero preserves the serial reference path.
   data_workers: 0
+  # Process backend is intended for Linux hosts; the portable default is threads.
+  data_prefetch_backend: thread
   layerwise_lr_decay: 0.85
   early_stopping_patience: 15
   max_epochs_default: 100
