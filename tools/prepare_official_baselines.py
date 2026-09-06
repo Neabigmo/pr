@@ -33,6 +33,14 @@ from pr_pilot.runtime.gemmi_adapter import parse_chain_list
 PROTEIN_ATOM_ORDER = [
     "N", "CA", "C", "O", "CB", "CG", "CG1", "CG2", "OG", "OG1", "SG", "CD", "CD1", "CD2"
 ]
+RNA_BACKBONE_ATOMS = {
+    "OP1", "OP2", "P", "O5'", "C5'", "C4'", "O4'", "C3'", "O3'", "C2'", "O2'", "C1'"
+}
+
+
+def _safe_filename(value: str) -> str:
+    """Keep manifest IDs in metadata while making generated paths Windows-safe."""
+    return "".join(char if char.isalnum() or char in "-_" else "_" for char in str(value))
 
 
 def read_manifest(path: Path) -> pd.DataFrame:
@@ -255,6 +263,23 @@ def _rna_preprocessed_paths(root: Path, stem: str, length: int) -> dict:
     return result
 
 
+def _rna_backbone_valid_positions(residues) -> list[int]:
+    """Return residues that the pinned NA-MPNN loader can represent.
+
+    The upstream loader removes nucleic-acid residues unless every atom in its
+    RNA backbone list is present above the occupancy cutoff.  The generated
+    RNA-only PDB keeps the complete source view, so the auxiliary arrays must
+    use the same post-loader positions or featurization becomes misaligned.
+    This is an adapter detail, not a new sample filter.
+    """
+    positions = []
+    for index, residue in enumerate(residues):
+        atoms = _residue_atom_dict(residue)
+        if all(name in atoms and atoms[name][1] > 0.8 for name in RNA_BACKBONE_ATOMS):
+            positions.append(index)
+    return positions
+
+
 def _estimate_na_steps(lengths: list[int], batch_tokens: int, passes: int) -> int:
     """Approximate official StructureLoader batches for equal dataset-pass budget."""
     batch = []
@@ -287,6 +312,9 @@ def prepare_nampnn(
     pdb_dir.mkdir(exist_ok=True)
     outputs = {}
     train_lengths = []
+    structural_drops = []
+    zero_backbone = {"train": [], "valid": []}
+    effective_counts = {"train": 0, "valid": 0}
 
     for split, path in [("train", train_path), ("valid", val_path)]:
         dataframe = read_manifest(path)
@@ -299,9 +327,12 @@ def prepare_nampnn(
             )
             if obtained != sequence:
                 raise AssertionError("Canonical RNA baseline sequence drift")
-            stem = f"{split}_{index:04d}_{row['sample_id']}"
+            stem = f"{split}_{index:04d}_{_safe_filename(str(row['sample_id']))}"
             pdb_path = (pdb_dir / f"{stem}.pdb").resolve()
             write_rna_only_pdb(pdb_path, residues, sequence)
+            valid_positions = _rna_backbone_valid_positions(residues)
+            effective_length = len(valid_positions)
+            dropped_positions = [position + 1 for position in range(len(sequence)) if position not in valid_positions]
             record = {
                 "id": str(row["sample_id"]),
                 "structure_path": str(pdb_path),
@@ -309,11 +340,29 @@ def prepare_nampnn(
                 "sampling_probability": 1.0,
                 "ppm_paths": "[]",
                 "source_chain": chain_name,
+                "source_length": len(sequence),
+                "structurally_valid_length": effective_length,
+                "dropped_backbone_positions": json.dumps(dropped_positions),
             }
-            record.update(_rna_preprocessed_paths(out, stem, len(sequence)))
+            record.update(_rna_preprocessed_paths(out, stem, effective_length))
             rows.append(record)
+            if effective_length > 0:
+                effective_counts[split] += 1
             if split == "train":
-                train_lengths.append(len(sequence))
+                if effective_length > 0:
+                    train_lengths.append(effective_length)
+            if dropped_positions:
+                structural_drops.append(
+                    {
+                        "split": split,
+                        "sample_id": str(row["sample_id"]),
+                        "source_length": len(sequence),
+                        "structurally_valid_length": effective_length,
+                        "dropped_backbone_positions": dropped_positions,
+                    }
+                )
+            if effective_length == 0:
+                zero_backbone[split].append(str(row["sample_id"]))
         out_csv = out / f"{split}.csv"
         pd.DataFrame(rows).to_csv(out_csv, index=False)
         outputs[split] = str(out_csv.resolve())
@@ -387,6 +436,11 @@ def prepare_nampnn(
         "estimated_total_steps": total_steps,
         "config": str(cfg_path),
         "conversion_failures": 0,
+        "effective_train": effective_counts["train"],
+        "effective_val": effective_counts["valid"],
+        "structural_residue_drops": structural_drops,
+        "zero_backbone_train": zero_backbone["train"],
+        "zero_backbone_valid": zero_backbone["valid"],
     }
 
 

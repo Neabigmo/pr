@@ -376,7 +376,10 @@ def screen_file(path: Path, kind: Literal["protein", "rna", "complex"], cfg: Scr
         return None, "selected_chain_reference_atom_missing"
     p_len = sum(len(c.residues) for c in proteins)
     r_len = sum(len(c.residues) for c in rnas)
-    if p_len < cfg.protein_min_length or r_len < cfg.rna_min_length:
+    if not (
+        cfg.protein_min_length <= p_len <= cfg.protein_max_length
+        and cfg.rna_min_length <= r_len <= cfg.rna_max_length
+    ):
         return None, "complex_chain_length"
     if p_len + r_len > cfg.max_total_tokens:
         return None, "complex_too_long"
