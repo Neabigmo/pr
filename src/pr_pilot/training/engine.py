@@ -13,12 +13,16 @@ Scientific invariants implemented here:
 """
 from __future__ import annotations
 
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import nullcontext
+import multiprocessing as mp
 from pathlib import Path
 import hashlib
 import json
 import math
 import random
+import time
 
 import numpy as np
 import torch
@@ -178,6 +182,194 @@ def _joint_unfreezing_mode(cfg: dict) -> str:
     return mode
 
 
+def _load_training_sample(adapter: GemmiStructureAdapter, stage: Stage, row):
+    if stage == Stage.PROTEIN_PRIOR:
+        return load_protein_row(adapter, row)
+    if stage == Stage.RNA_PRIOR:
+        return load_rna_row(adapter, row)
+    return load_complex_row(adapter, row)
+
+
+def _adapter_prefetch_spec(adapter: GemmiStructureAdapter) -> tuple:
+    """Return the CPU-only adapter settings needed by a worker process."""
+    return (
+        adapter.rbf_bins,
+        adapter.intra_max_neighbors,
+        adapter.pr_cutoff,
+        adapter.pr_max_neighbors,
+        adapter.noise,
+        adapter.seed,
+        adapter.rich_pr_geometry,
+    )
+
+
+_PROCESS_ADAPTER: GemmiStructureAdapter | None = None
+_PROCESS_ADAPTER_SPEC: tuple | None = None
+
+
+def _load_training_sample_in_process(payload: tuple):
+    """Load one sample in a persistent CPU worker process.
+
+    The adapter is reconstructed lazily and cached per worker.  Passing only
+    immutable settings and the manifest row keeps the parent process from
+    serializing a live adapter or sharing parser state across processes.
+    """
+    global _PROCESS_ADAPTER, _PROCESS_ADAPTER_SPEC
+    adapter_spec, stage_value, row = payload
+    if _PROCESS_ADAPTER is None or _PROCESS_ADAPTER_SPEC != adapter_spec:
+        _PROCESS_ADAPTER = GemmiStructureAdapter(
+            rbf_bins=adapter_spec[0],
+            intra_max_neighbors=adapter_spec[1],
+            pr_cutoff_angstrom=adapter_spec[2],
+            pr_max_neighbors=adapter_spec[3],
+            coordinate_noise_angstrom=adapter_spec[4],
+            seed=adapter_spec[5],
+            rich_pr_geometry=adapter_spec[6],
+        )
+        _PROCESS_ADAPTER_SPEC = adapter_spec
+    return _prefetch_numpy(_load_training_sample(_PROCESS_ADAPTER, Stage(stage_value), row))
+
+
+def _prefetch_numpy(value):
+    """Convert a CPU graph to NumPy before crossing a process boundary.
+
+    PyTorch's multiprocessing reducer may transfer each tensor through shared
+    memory/file descriptors.  A bounded queue of variable-size graphs can then
+    stall behind those transfers.  Plain NumPy buffers use ordinary bounded
+    pickle payloads and are restored to CPU tensors in the consumer process.
+    """
+    fields = [
+        "node_x",
+        "edge_index",
+        "edge_x",
+        "sequence",
+        "interface",
+        "valid",
+        "fixed",
+        "reference_xyz",
+        "chain_index",
+    ]
+
+    def graph_to_numpy(graph: PolymerGraph) -> PolymerGraph:
+        for name in fields:
+            setattr(graph, name, getattr(graph, name).detach().cpu().numpy())
+        return graph
+
+    if isinstance(value, PolymerGraph):
+        return graph_to_numpy(value)
+    value.protein = graph_to_numpy(value.protein)
+    value.rna = graph_to_numpy(value.rna)
+    value.pr = PRBatch(
+        value.pr.protein_index.detach().cpu().numpy(),
+        value.pr.rna_index.detach().cpu().numpy(),
+        value.pr.edge_features.detach().cpu().numpy(),
+        value.pr.effective_distance.detach().cpu().numpy(),
+        None if value.pr.edge_batch is None else value.pr.edge_batch.detach().cpu().numpy(),
+    )
+    return value
+
+
+def _restore_prefetched_tensors(value):
+    """Restore NumPy-backed process results to CPU tensors in the trainer."""
+    fields = [
+        "node_x",
+        "edge_index",
+        "edge_x",
+        "sequence",
+        "interface",
+        "valid",
+        "fixed",
+        "reference_xyz",
+        "chain_index",
+    ]
+
+    def graph_to_tensors(graph: PolymerGraph) -> PolymerGraph:
+        for name in fields:
+            tensor = getattr(graph, name)
+            if not torch.is_tensor(tensor):
+                setattr(graph, name, torch.from_numpy(tensor))
+        return graph
+
+    if isinstance(value, PolymerGraph):
+        return graph_to_tensors(value)
+    value.protein = graph_to_tensors(value.protein)
+    value.rna = graph_to_tensors(value.rna)
+    value.pr = PRBatch(
+        torch.from_numpy(value.pr.protein_index) if not torch.is_tensor(value.pr.protein_index) else value.pr.protein_index,
+        torch.from_numpy(value.pr.rna_index) if not torch.is_tensor(value.pr.rna_index) else value.pr.rna_index,
+        torch.from_numpy(value.pr.edge_features) if not torch.is_tensor(value.pr.edge_features) else value.pr.edge_features,
+        torch.from_numpy(value.pr.effective_distance) if not torch.is_tensor(value.pr.effective_distance) else value.pr.effective_distance,
+        None if value.pr.edge_batch is None else (torch.from_numpy(value.pr.edge_batch) if not torch.is_tensor(value.pr.edge_batch) else value.pr.edge_batch),
+    )
+    return value
+
+
+def _prefetch_training_samples(
+    rows: list,
+    adapter: GemmiStructureAdapter,
+    stage: Stage,
+    workers: int,
+    process_pool: ProcessPoolExecutor | None = None,
+    backend: str = "thread",
+):
+    """Yield rows with bounded CPU-side preparation ahead of model execution.
+
+    The model still receives one variable-size graph at a time, so this does not
+    change optimizer steps, batching semantics, data order, or metrics.  It only
+    overlaps structure parsing/graph construction with the previous GPU step.
+
+    ``thread`` is the portable default.  ``process`` is intended for Linux
+    training hosts where Gemmi/feature construction is Python-heavy and a
+    thread pool cannot use the available CPU cores effectively.  A supplied
+    process pool is reused across epochs and validation to avoid respawn cost.
+    """
+    workers = max(0, int(workers))
+    if workers == 0:
+        for row in rows:
+            yield row, _load_training_sample(adapter, stage, row)
+        return
+
+    if backend not in {"thread", "process"}:
+        raise ValueError(f"Unknown data_prefetch_backend={backend!r}")
+
+    pending = deque()
+    row_iter = iter(rows)
+    owned_pool = None
+    if backend == "process":
+        pool = process_pool
+        if pool is None:
+            # Spawn avoids inheriting a live CUDA context into CPU workers.
+            pool = ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn"))
+            owned_pool = pool
+        submit = lambda item: pool.submit(_load_training_sample_in_process, item)
+        adapter_spec = _adapter_prefetch_spec(adapter)
+        make_item = lambda row: (adapter_spec, stage.value, row)
+    else:
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="structure-prefetch")
+        owned_pool = pool
+        submit = lambda item: pool.submit(_load_training_sample, adapter, stage, item)
+        make_item = lambda row: row
+
+    try:
+        for _ in range(min(len(rows), workers * 2)):
+            row = next(row_iter, None)
+            if row is None:
+                break
+            pending.append((row, submit(make_item(row))))
+        while pending:
+            row, future = pending.popleft()
+            prepared = future.result()
+            if backend == "process":
+                prepared = _restore_prefetched_tensors(prepared)
+            next_row = next(row_iter, None)
+            if next_row is not None:
+                pending.append((next_row, submit(make_item(next_row))))
+            yield row, prepared
+    finally:
+        if owned_pool is not None:
+            owned_pool.shutdown(wait=True)
+
+
 def _all_interface_corruption(graph: PolymerGraph) -> tuple[Tensor, Tensor, Tensor]:
     target = graph.interface & graph.valid & ~graph.fixed
     if not target.any():
@@ -265,12 +457,13 @@ def _one_training_loss(
     epoch: int,
     progress: float,
     device: torch.device,
+    prepared=None,
 ) -> tuple[Tensor, dict]:
     seed = int(cfg["experiment"]["pilot_seed"])
     mcfg, lcfg = cfg["masking"], cfg["loss"]
 
     if stage == Stage.PROTEIN_PRIOR:
-        graph = _move_graph(load_protein_row(adapter, row), device)
+        graph = _move_graph(prepared if prepared is not None else load_protein_row(adapter, row), device)
         _augment_graphs(graph, cfg, stage, row.sample_id, epoch)
         corruption = _corrupt(graph, 20, row, epoch, seed, cfg, progress)
         logits, _ = model.protein_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, corruption.input_tokens, corruption.known)
@@ -278,14 +471,14 @@ def _one_training_loss(
         return breakdown.total, {**breakdown.detached_scalars(), "mask_fraction": corruption.sampled_fraction, "mask_mode": corruption.mode}
 
     if stage == Stage.RNA_PRIOR:
-        graph = _move_graph(load_rna_row(adapter, row), device)
+        graph = _move_graph(prepared if prepared is not None else load_rna_row(adapter, row), device)
         _augment_graphs(graph, cfg, stage, row.sample_id, epoch)
         corruption = _corrupt(graph, 4, row, epoch, seed, cfg, progress)
         logits, _ = model.rna_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, corruption.input_tokens, corruption.known)
         breakdown = balanced_sequence_loss(None, None, None, None, logits, graph.sequence, corruption.target_mask, graph.interface, "rna", 0.0, float(lcfg["rna_label_smoothing"]))
         return breakdown.total, {**breakdown.detached_scalars(), "mask_fraction": corruption.sampled_fraction, "mask_mode": corruption.mode}
 
-    sample = _move_complex(load_complex_row(adapter, row), device)
+    sample = _move_complex(prepared if prepared is not None else load_complex_row(adapter, row), device)
     _augment_graphs(sample, cfg, stage, row.sample_id, epoch)
 
     if stage in {Stage.GLOBAL_C, Stage.DELTA_C, Stage.ALPHA}:
@@ -423,24 +616,33 @@ def sequential_joint_pseudonll(model: JointPriorAndFieldModel, sample: ComplexTe
 
 
 @torch.no_grad()
-def validate_stage(model: JointPriorAndFieldModel, stage: Stage, manifest: ManifestTable, cfg: dict, device: torch.device) -> float:
+def validate_stage(
+    model: JointPriorAndFieldModel,
+    stage: Stage,
+    manifest: ManifestTable,
+    cfg: dict,
+    device: torch.device,
+    process_pool: ProcessPoolExecutor | None = None,
+) -> float:
     model.eval()
     adapter = _adapter(cfg, 0, training=False)
     rows = list(manifest.rows())
+    workers = int(cfg.get("optimization", {}).get("data_workers", 0))
+    backend = str(cfg.get("optimization", {}).get("data_prefetch_backend", "thread"))
     if not rows:
         raise ValueError("Empty validation manifest")
 
     if stage in {Stage.PROTEIN_PRIOR, Stage.RNA_PRIOR}:
         values = []
-        for row in rows:
+        for row, graph in _prefetch_training_samples(rows, adapter, stage, workers, process_pool, backend):
             with _autocast(cfg, device):
                 if stage == Stage.PROTEIN_PRIOR:
-                    graph = _move_graph(load_protein_row(adapter, row), device)
+                    graph = _move_graph(graph, device)
                     known = graph.fixed & graph.valid
                     logits, _ = model.protein_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, graph.sequence, known)
                     b = balanced_sequence_loss(logits, graph.sequence, graph.valid & ~graph.fixed, graph.interface, None, None, None, None, "protein", 0.0, 0.0)
                 else:
-                    graph = _move_graph(load_rna_row(adapter, row), device)
+                    graph = _move_graph(graph, device)
                     known = graph.fixed & graph.valid
                     logits, _ = model.rna_prior_logits(graph.node_x, graph.edge_index, graph.edge_x, graph.sequence, known)
                     b = balanced_sequence_loss(None, None, None, None, logits, graph.sequence, graph.valid & ~graph.fixed, graph.interface, "rna", 0.0, 0.0)
@@ -452,9 +654,9 @@ def validate_stage(model: JointPriorAndFieldModel, stage: Stage, manifest: Manif
     seed = int(cfg["experiment"]["pilot_seed"])
     joint_ids = {row.sample_id for row in sorted(rows, key=lambda x: _stable_seed(seed, x.sample_id, "joint-validation-subset"))[:joint_limit]}
 
-    for row in rows:
+    for row, sample in _prefetch_training_samples(rows, adapter, stage, workers, process_pool, backend):
         with _autocast(cfg, device):
-            sample = _move_complex(load_complex_row(adapter, row), device)
+            sample = _move_complex(sample, device)
             ptok, pknown, pmask = _all_interface_corruption(sample.protein)
             rtok, rknown, rmask = _all_interface_corruption(sample.rna)
             use_delta, learned_alpha = _stage_flags(stage)
@@ -502,36 +704,63 @@ def train_stage(cfg: dict, stage: Stage, train_manifest: Path, val_manifest: Pat
     train_table = ManifestTable(train_manifest); val_table = ManifestTable(val_manifest)
     max_epochs = int(cfg["training_stages"][stage.value].get("max_epochs", cfg["optimization"].get("max_epochs_default", 100)))
     patience = int(optcfg["early_stopping_patience"]); total_steps = max_epochs * max(1, len(train_table))
-    out_dir.mkdir(parents=True, exist_ok=True); metrics_path = out_dir / "metrics.jsonl"; best_path = out_dir / "best.pt"
+    out_dir.mkdir(parents=True, exist_ok=True); metrics_path = out_dir / "metrics.jsonl"; progress_path = out_dir / "progress.jsonl"; best_path = out_dir / "best.pt"
     best = float("inf"); bad_epochs = 0; global_step = 0
+    workers = int(optcfg.get("data_workers", 0))
+    backend = str(optcfg.get("data_prefetch_backend", "thread"))
+    process_pool = None
+    if workers > 0 and backend == "process":
+        # Keep one pool alive for the complete stage.  Recreating twelve
+        # interpreter processes every epoch would erase much of the gain.
+        process_pool = ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("spawn"))
 
-    for epoch in range(max_epochs):
-        model.train(); progress = epoch / max(1, max_epochs - 1)
-        if stage == Stage.JOINT and joint_mode == "gradual": apply_joint_unfreezing(model, progress)
-        adapter = _adapter(cfg, epoch, training=True)
-        rows = list(train_table.rows()); random.Random(seed + epoch * 104729).shuffle(rows)
-        running = []; mask_fractions = []; hard_count = 0; task_counts: dict[str, int] = {}
-        for row in rows:
-            optimizer.zero_grad(set_to_none=True)
-            with _autocast(cfg, dev): loss, detail = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev)
-            if not torch.isfinite(loss): raise FloatingPointError(f"Non-finite loss at {stage.value} epoch={epoch} sample={row.sample_id}")
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad and p.grad is not None], float(optcfg["grad_clip_norm"]))
-            optimizer.step(); global_step += 1
-            _cosine_schedule(optimizer, global_step, total_steps, float(optcfg["warmup_fraction"]), base_lrs)
-            running.append(float(loss.detach().cpu()))
-            if "mask_fraction" in detail: mask_fractions.append(float(detail["mask_fraction"]))
-            if detail.get("hard_context"): hard_count += 1
-            if "task" in detail: task_counts[str(detail["task"])] = task_counts.get(str(detail["task"]), 0) + 1
+    stage_started = time.perf_counter()
+    progress_handle = progress_path.open("a", encoding="utf-8")
+    try:
+        for epoch in range(max_epochs):
+            model.train(); progress = epoch / max(1, max_epochs - 1)
+            if stage == Stage.JOINT and joint_mode == "gradual": apply_joint_unfreezing(model, progress)
+            adapter = _adapter(cfg, epoch, training=True)
+            rows = list(train_table.rows()); random.Random(seed + epoch * 104729).shuffle(rows)
+            running = []; mask_fractions = []; hard_count = 0; task_counts: dict[str, int] = {}
+            for sample_index, (row, prepared) in enumerate(_prefetch_training_samples(rows, adapter, stage, workers, process_pool, backend), start=1):
+                optimizer.zero_grad(set_to_none=True)
+                with _autocast(cfg, dev): loss, detail = _one_training_loss(model, row, adapter, stage, cfg, epoch, progress, dev, prepared)
+                if not torch.isfinite(loss): raise FloatingPointError(f"Non-finite loss at {stage.value} epoch={epoch} sample={row.sample_id}")
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad and p.grad is not None], float(optcfg["grad_clip_norm"]))
+                optimizer.step(); global_step += 1
+                _cosine_schedule(optimizer, global_step, total_steps, float(optcfg["warmup_fraction"]), base_lrs)
+                running.append(float(loss.detach().cpu()))
+                if "mask_fraction" in detail: mask_fractions.append(float(detail["mask_fraction"]))
+                if detail.get("hard_context"): hard_count += 1
+                if "task" in detail: task_counts[str(detail["task"])] = task_counts.get(str(detail["task"]), 0) + 1
+                progress_handle.write(json.dumps({
+                    "event": "sample_completed",
+                    "stage": stage.value,
+                    "epoch": epoch,
+                    "sample_index": sample_index,
+                    "total_samples": len(rows),
+                    "sample_id": row.sample_id,
+                    "loss": float(loss.detach().cpu()),
+                    "elapsed_seconds": time.perf_counter() - stage_started,
+                }, sort_keys=True) + "\n")
+                progress_handle.flush()
+                if sample_index == 1 or sample_index % 10 == 0 or sample_index == len(rows):
+                    print(f"[progress] stage={stage.value} epoch={epoch + 1}/{max_epochs} sample={sample_index}/{len(rows)} loss={float(loss.detach().cpu()):.6f}", flush=True)
 
-        val = validate_stage(model, stage, val_table, cfg, dev)
-        record = {"stage": stage.value, "epoch": epoch, "train_loss": float(np.mean(running)), "val_metric": val, "mean_mask_fraction": float(np.mean(mask_fractions)) if mask_fractions else None, "hard_context_samples": hard_count, "task_counts": task_counts, "joint_unfreezing_mode": joint_mode, "trainable": trainable_parameter_report(model), "precision": "bf16" if dev.type == "cuda" and str(optcfg.get("precision", "")).lower() == "bf16" and torch.cuda.is_bf16_supported() else "fp32"}
-        with metrics_path.open("a", encoding="utf-8") as handle: handle.write(json.dumps(record, sort_keys=True) + "\n")
-        if val < best - 1e-6:
-            best = val; bad_epochs = 0
-            torch.save({"model": model.state_dict(), "stage": stage.value, "epoch": epoch, "val_metric": val, "joint_unfreezing_mode": joint_mode, "config": cfg}, best_path)
-        else:
-            bad_epochs += 1
-            if bad_epochs >= patience: break
+            val = validate_stage(model, stage, val_table, cfg, dev, process_pool)
+            record = {"stage": stage.value, "epoch": epoch, "train_loss": float(np.mean(running)), "val_metric": val, "mean_mask_fraction": float(np.mean(mask_fractions)) if mask_fractions else None, "hard_context_samples": hard_count, "task_counts": task_counts, "joint_unfreezing_mode": joint_mode, "trainable": trainable_parameter_report(model), "precision": "bf16" if dev.type == "cuda" and str(optcfg.get("precision", "")).lower() == "bf16" and torch.cuda.is_bf16_supported() else "fp32"}
+            with metrics_path.open("a", encoding="utf-8") as handle: handle.write(json.dumps(record, sort_keys=True) + "\n")
+            if val < best - 1e-6:
+                best = val; bad_epochs = 0
+                torch.save({"model": model.state_dict(), "stage": stage.value, "epoch": epoch, "val_metric": val, "joint_unfreezing_mode": joint_mode, "config": cfg}, best_path)
+            else:
+                bad_epochs += 1
+                if bad_epochs >= patience: break
+    finally:
+        if process_pool is not None:
+            process_pool.shutdown(wait=True)
+        progress_handle.close()
     if not best_path.exists(): raise RuntimeError("No checkpoint was saved")
     return best_path

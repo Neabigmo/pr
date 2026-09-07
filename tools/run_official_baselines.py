@@ -49,7 +49,12 @@ def clone_locked(repo_root: Path, third_party_root: Path) -> dict[str, Path]:
         destination = third_party_root / ("ProteinMPNN" if name == "ProteinMPNN" else "NA-MPNN")
         if not destination.exists():
             _run(["git", "clone", spec.url, str(destination)])
-        _git(["fetch", "--all", "--tags"], destination)
+        # An exact, pre-verified checkout is sufficient for an offline run.
+        # This keeps the baseline reproducible on remote workers without
+        # network access while still fetching when an existing checkout drifts.
+        current = _git(["rev-parse", "HEAD"], destination)
+        if current != spec.commit:
+            _git(["fetch", "--all", "--tags"], destination)
         _git(["checkout", "--detach", spec.commit], destination)
         head = _git(["rev-parse", "HEAD"], destination)
         if head != spec.commit:
@@ -61,17 +66,28 @@ def clone_locked(repo_root: Path, third_party_root: Path) -> dict[str, Path]:
     return paths
 
 
-def _seeded_upstream(repo_root: Path, seed: int, script: Path, forwarded: list[str]) -> list[str]:
-    return [
+def _seeded_upstream(
+    repo_root: Path,
+    seed: int,
+    script: Path,
+    forwarded: list[str],
+    serial_resource_profile: bool = False,
+    redirect_na_data_root: Path | None = None,
+) -> list[str]:
+    command = [
         sys.executable,
         str(repo_root / "tools" / "run_seeded_upstream.py"),
         "--seed",
         str(seed),
         "--script",
         str(script),
-        "--",
-        *forwarded,
     ]
+    if serial_resource_profile:
+        command.append("--serial-resource-profile")
+    if redirect_na_data_root is not None:
+        command.extend(["--redirect-na-data-root", str(redirect_na_data_root)])
+    command.extend(["--", *forwarded])
+    return command
 
 
 def _prepare(
@@ -116,7 +132,11 @@ def _protein_command(
         "--reload_data_every_n_epochs", "1",
         "--num_examples_per_epoch", str(examples_per_epoch),
         "--batch_size", "6000",
-        "--max_protein_length", "1000",
+        # The frozen prior pool contains a 1524-aa sample. Keep every frozen ID
+        # in the official baseline instead of letting the upstream loader reject
+        # it under its smaller default cap; the declared screening window remains
+        # 40-2000 aa and the observed exception is recorded in the benchmark log.
+        "--max_protein_length", "2000",
         "--hidden_dim", "128",
         "--num_encoder_layers", "3",
         "--num_decoder_layers", "3",
@@ -127,7 +147,13 @@ def _protein_command(
         "--gradient_norm", "1.0",
         "--mixed_precision", "True",
     ]
-    return _seeded_upstream(repo_root, seed, repo / "training" / "training.py", forwarded)
+    return _seeded_upstream(
+        repo_root,
+        seed,
+        repo / "training" / "training.py",
+        forwarded,
+        serial_resource_profile=True,
+    )
 
 
 def _materialize_na_config(template: Path, destination: Path, output_root: Path) -> Path:
@@ -140,6 +166,10 @@ def _materialize_na_config(template: Path, destination: Path, output_root: Path)
     # batch exits instead of running one unintended extra pass.
     if "TOTAL_STEPS" in cfg:
         cfg["TOTAL_STEPS"] = max(0, int(cfg["TOTAL_STEPS"]) - 1)
+    # The wrapper also enforces this in-memory; keeping the materialized config
+    # explicit makes the local resource policy auditable and avoids spawning
+    # DataLoader workers before the wrapper can patch them.
+    cfg["NUM_WORKERS"] = 0
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(cfg, indent=2, sort_keys=True), encoding="utf-8")
     return destination
@@ -147,7 +177,15 @@ def _materialize_na_config(template: Path, destination: Path, output_root: Path)
 
 def _na_command(repo_root: Path, repo: Path, config: Path, seed: int) -> list[str]:
     """Pinned NA-MPNN ``na_run.py`` consumes exactly one positional JSON file."""
-    return _seeded_upstream(repo_root, seed, repo / "na_run.py", [str(config)])
+    local_na_data = repo.parent.parent / "dependencies" / "na_data"
+    return _seeded_upstream(
+        repo_root,
+        seed,
+        repo / "na_run.py",
+        [str(config)],
+        serial_resource_profile=True,
+        redirect_na_data_root=local_na_data,
+    )
 
 
 def _best_epoch(log_path: Path, pattern: re.Pattern[str], label: str) -> tuple[int, float]:

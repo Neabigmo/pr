@@ -11,7 +11,8 @@ import torch
 from torch import Tensor
 import torch.nn.functional as F
 
-from pr_pilot.evaluation.battery import expected_calibration_error, native_probability_brier
+from pr_pilot.evaluation.audit_metrics import multiclass_brier_score, top_label_brier_score
+from pr_pilot.evaluation.battery import expected_calibration_error
 from pr_pilot.evaluation.runner import score_conditional
 from pr_pilot.model.dmicf import JointPriorAndFieldModel, PRBatch
 from pr_pilot.runtime.dataset_adapter import ComplexTensorSample
@@ -105,6 +106,25 @@ def alpha_edge_removal(model:JointPriorAndFieldModel,s:ComplexTensorSample,max_t
 
 
 def calibration_table(predictions:pd.DataFrame,bins:int=15)->dict[str,float]:
-    if len(predictions)==0: return {"n":0,"ece":float("nan"),"native_brier":float("nan")}
-    correct=(predictions.native_token.to_numpy()==predictions.predicted_token.to_numpy()).astype(float); confidence=predictions.max_probability.to_numpy(float); native_prob=np.exp(predictions.native_log_probability.to_numpy(float))
-    return {"n":int(len(predictions)),"ece":expected_calibration_error(correct,confidence,bins),"native_brier":native_probability_brier(native_prob),"mean_confidence":float(confidence.mean()),"accuracy":float(correct.mean())}
+    if len(predictions)==0:
+        return {"n":0,"ece":float("nan"),"multiclass_brier":float("nan"),"top_label_brier":float("nan")}
+    probability_columns = []
+    for index in range(20):
+        column = f"probability_{index}"
+        if column not in predictions:
+            break
+        probability_columns.append(column)
+    if len(probability_columns) < 2:
+        raise ValueError("Calibration requires the complete probability vector exported by the runner")
+    probabilities = predictions[probability_columns].to_numpy(float)
+    targets = predictions.native_token.to_numpy(int)
+    correct=(predictions.native_token.to_numpy()==predictions.predicted_token.to_numpy()).astype(float)
+    confidence=predictions.max_probability.to_numpy(float)
+    return {
+        "n":int(len(predictions)),
+        "ece":expected_calibration_error(correct,confidence,bins),
+        "multiclass_brier":multiclass_brier_score(probabilities,targets),
+        "top_label_brier":top_label_brier_score(confidence,correct),
+        "mean_confidence":float(confidence.mean()),
+        "accuracy":float(correct.mean()),
+    }

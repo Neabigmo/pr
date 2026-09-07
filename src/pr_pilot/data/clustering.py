@@ -53,18 +53,42 @@ def _run(command: list[str], log: Path) -> None:
         raise RuntimeError(f"Command failed ({proc.returncode}); inspect {log}")
 
 
-def run_mmseqs_cluster(fasta: Path, out_dir: Path, label: str, min_seq_id: float, coverage: float = 0.8) -> dict[str, str]:
-    """Run MMseqs2 easy-cluster and return member -> representative mapping."""
+def run_mmseqs_cluster(
+    fasta: Path,
+    out_dir: Path,
+    label: str,
+    min_seq_id: float,
+    coverage: float = 0.8,
+    threads: int | None = None,
+) -> dict[str, str]:
+    """Run MMseqs2 clustering and return the member-to-representative mapping.
+
+    The explicit ``createdb``/``cluster``/``createtsv`` sequence is equivalent
+    to the clustering stage of ``easy-cluster`` but avoids materializing the
+    representative and all-member FASTA exports.  Those exports can become
+    disproportionately large on the Windows/WSL filesystem while the TSV is
+    the only artifact required by the leakage-safe splitter.
+    """
     mmseqs = _require_executable("mmseqs")
-    prefix = out_dir / label
+    database = out_dir / f"{label}_db"
+    cluster_database = out_dir / f"{label}_clusters"
     tmp = out_dir / f"tmp_{label}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    command = [
-        mmseqs, "easy-cluster", str(fasta), str(prefix), str(tmp),
+    createdb = [mmseqs, "createdb", str(fasta), str(database)]
+    cluster = [
+        mmseqs, "cluster", str(database), str(cluster_database), str(tmp),
         "--min-seq-id", str(min_seq_id), "-c", str(coverage), "--cov-mode", "0",
     ]
-    _run(command, out_dir / f"{label}.log")
-    cluster_tsv = Path(str(prefix) + "_cluster.tsv")
+    createtsv = [mmseqs, "createtsv", str(database), str(database), str(cluster_database)]
+    if threads is not None:
+        if threads < 1:
+            raise ValueError("threads must be positive")
+        for command in (createdb, cluster, createtsv):
+            command.extend(["--threads", str(threads)])
+    cluster_tsv = out_dir / f"{label}_cluster.tsv"
+    _run(createdb, out_dir / f"{label}_createdb.log")
+    _run(cluster, out_dir / f"{label}.log")
+    _run([*createtsv, str(cluster_tsv)], out_dir / f"{label}_createtsv.log")
     if not cluster_tsv.exists():
         raise RuntimeError(f"MMseqs did not produce {cluster_tsv}")
     mapping: dict[str, str] = {}
@@ -108,7 +132,11 @@ def run_rfam_cmscan(fasta: Path, rfam_cm: Path, clanin: Path, out_dir: Path, cpu
         fields = line.split()
         if len(fields) < 4:
             continue
-        target_name, target_accession, query_name = fields[0], fields[1], fields[2]
+        # Infernal ``--fmt 2`` starts with index, target name, target
+        # accession, then query name.  The query identifier must be taken from
+        # column 4; using the accession column silently labels every sequence
+        # as ``unknown`` downstream.
+        target_name, target_accession, query_name = fields[1], fields[2], fields[3]
         family = target_accession if target_accession not in {"-", "."} else target_name
         hits.setdefault(query_name, set()).add(family)
     return hits
@@ -172,11 +200,11 @@ def annotate_all_candidates(
     _write_fasta(rna_sequences, rna_fasta)
 
     p_maps = {
-        col: run_mmseqs_cluster(protein_fasta, out_dir / "mmseqs", col, threshold)
+        col: run_mmseqs_cluster(protein_fasta, out_dir / "mmseqs", col, threshold, threads=cmscan_cpu)
         for col, threshold in PROTEIN_THRESHOLDS.items()
     }
     r_maps = {
-        col: run_mmseqs_cluster(rna_fasta, out_dir / "mmseqs", col, threshold)
+        col: run_mmseqs_cluster(rna_fasta, out_dir / "mmseqs", col, threshold, threads=cmscan_cpu)
         for col, threshold in RNA_THRESHOLDS.items()
     }
 

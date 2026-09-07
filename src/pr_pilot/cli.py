@@ -71,6 +71,7 @@ def _screen_config(cfg: dict) -> ScreenConfig:
         "max_total_tokens": raw.get("max_total_tokens", 1000),
         "max_resolution_angstrom": raw.get("max_resolution_angstrom", 4.0),
         "allow_nmr_without_resolution": raw.get("allow_nmr_without_resolution", True),
+        "apply_resolution_method_filter": raw.get("apply_resolution_method_filter", True),
         "interface_contact_angstrom": raw.get("interface_contact_angstrom", 6.0),
         "min_interfacial_residue_pairs": raw.get("min_interfacial_residue_pairs", 3),
         "max_interface_missing_fraction": raw.get("max_interface_missing_fraction", 0.10),
@@ -102,7 +103,16 @@ def cmd_download_rfam(args: argparse.Namespace) -> None:
 
 def cmd_screen(args: argparse.Namespace) -> None:
     cfg = _screen_config(load_config(args.config))
-    eligible, rejected = screen_download_manifest(args.download_manifest, args.kind, args.out, cfg)
+    progress_log = args.progress_log or args.out / f"{args.kind}_progress.jsonl"
+    eligible, rejected = screen_download_manifest(
+        args.download_manifest,
+        args.kind,
+        args.out,
+        cfg,
+        progress_log=progress_log,
+        progress_label=args.progress_label or f"screen {args.kind}",
+        show_progress=not args.no_progress,
+    )
     print(f"{args.kind}: eligible={len(eligible)} rejected={len(rejected)} -> {args.out}")
 
 
@@ -321,6 +331,9 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--config", type=Path, required=True)
     sc.add_argument("--download-manifest", type=Path, required=True)
     sc.add_argument("--out", type=Path, required=True)
+    sc.add_argument("--progress-log", type=Path)
+    sc.add_argument("--progress-label")
+    sc.add_argument("--no-progress", action="store_true")
     sc.set_defaults(func=cmd_screen)
 
     an = sub.add_parser("annotate")

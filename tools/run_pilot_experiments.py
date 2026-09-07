@@ -142,7 +142,7 @@ def _train_one_development_stage(
         out_dir,
     )
     if init_checkpoint is not None:
-        command += ["--init-checkpoint", init_checkpoint]
+        command += ["--init-checkpoint", str(init_checkpoint)]
     if device:
         command += ["--device", device]
     _run(command, execute)
