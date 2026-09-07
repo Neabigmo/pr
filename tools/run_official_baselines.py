@@ -49,7 +49,12 @@ def clone_locked(repo_root: Path, third_party_root: Path) -> dict[str, Path]:
         destination = third_party_root / ("ProteinMPNN" if name == "ProteinMPNN" else "NA-MPNN")
         if not destination.exists():
             _run(["git", "clone", spec.url, str(destination)])
-        _git(["fetch", "--all", "--tags"], destination)
+        # An exact, pre-verified checkout is sufficient for an offline run.
+        # This keeps the baseline reproducible on remote workers without
+        # network access while still fetching when an existing checkout drifts.
+        current = _git(["rev-parse", "HEAD"], destination)
+        if current != spec.commit:
+            _git(["fetch", "--all", "--tags"], destination)
         _git(["checkout", "--detach", spec.commit], destination)
         head = _git(["rev-parse", "HEAD"], destination)
         if head != spec.commit:
