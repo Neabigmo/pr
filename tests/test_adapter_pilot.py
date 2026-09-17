@@ -101,6 +101,111 @@ def test_directional_edge_encoders_and_edge_sets_are_independent():
     assert out["rna_logits"].shape == r_base.shape
 
 
+def _v2_toy_inputs():
+    p_len, r_len = 4, 3
+    p_base = torch.randn(p_len, 20)
+    r_base = torch.randn(r_len, 4)
+    p_hidden = torch.randn(p_len, 128)
+    r_hidden = torch.randn(r_len, 128)
+    p_tokens = torch.tensor([1, 2, 3, 4], dtype=torch.long)
+    r_tokens = torch.tensor([0, 1, 2], dtype=torch.long)
+    edges = torch.tensor([[0, 1, 2, 3], [0, 1, 2, 0]], dtype=torch.long)
+    geometry = torch.randn(edges.shape[1], 114)
+    return p_base, r_base, p_hidden, r_hidden, p_tokens, r_tokens, edges, geometry
+
+
+def _v2_model(**kwargs):
+    model = ReciprocalAdapter(
+        AdapterConfig(
+            sequence_independent_attention=True,
+            partner_centered_residual=True,
+            token_dim=64,
+            **kwargs,
+        )
+    ).eval()
+    with torch.no_grad():
+        model.r2p.output.weight.normal_(0.0, 0.2)
+        model.p2r.output.weight.normal_(0.0, 0.2)
+    return model
+
+
+def test_v2_null_softmax_has_one_common_normalization():
+    model = _v2_model()
+    inputs = _v2_toy_inputs()
+    out = model(*inputs)
+    edge_index = inputs[6]
+    weights = out["protein_edge_weights"]
+    null = out["protein_null_weight"]
+    total = torch.zeros(inputs[0].shape[0])
+    total.index_add_(0, edge_index[0], weights)
+    assert torch.allclose(total + null, torch.ones_like(total), atol=1e-6)
+
+
+def test_v2_partner_centered_token_off_is_exact_prior():
+    model = _v2_model()
+    inputs = _v2_toy_inputs()
+    native = model(*inputs, token_off=False)
+    off = model(*inputs, token_off=True)
+    assert torch.count_nonzero(off["protein_delta"]) == 0
+    assert torch.count_nonzero(off["rna_delta"]) == 0
+    assert torch.allclose(off["protein_logits"], inputs[0])
+    assert torch.allclose(off["rna_logits"], inputs[1])
+    with torch.no_grad():
+        model.r2p.token_embedding.weight.zero_()
+    zero_identity = model(*inputs, token_off=False)
+    assert torch.allclose(zero_identity["protein_delta"], torch.zeros_like(native["protein_delta"]), atol=1e-6)
+
+
+def test_v2_partner_token_changes_residual():
+    model = _v2_model()
+    inputs = list(_v2_toy_inputs())
+    native = model(*inputs)["protein_delta"]
+    inputs[5] = inputs[5].roll(1, 0)
+    changed = model(*inputs)["protein_delta"]
+    assert torch.count_nonzero(native - changed) > 0
+
+
+def test_v2_no_partner_edge_has_zero_residual_and_unit_null_weight():
+    model = _v2_model()
+    inputs = list(_v2_toy_inputs())
+    inputs[6] = torch.zeros((2, 0), dtype=torch.long)
+    inputs[7] = torch.zeros((0, 114))
+    out = model(*inputs)
+    assert torch.count_nonzero(out["protein_delta"]) == 0
+    assert torch.count_nonzero(out["rna_delta"]) == 0
+    assert torch.allclose(out["protein_null_weight"], torch.ones(4))
+    assert torch.allclose(out["rna_null_weight"], torch.ones(3))
+
+
+def test_v2_gate_zero_returns_prior_exactly():
+    model = _v2_model(conservative_gate=True)
+    inputs = _v2_toy_inputs()
+    with torch.no_grad():
+        model.r2p.gate_logit.zero_()
+        model.p2r.gate_logit.zero_()
+    out = model(*inputs)
+    assert torch.count_nonzero(out["protein_delta"]) == 0
+    assert torch.count_nonzero(out["rna_delta"]) == 0
+    assert torch.allclose(out["protein_logits"], inputs[0])
+    assert torch.allclose(out["rna_logits"], inputs[1])
+
+
+def test_v2_directional_indexing_uses_target_and_partner_axes():
+    model = _v2_model()
+    inputs = list(_v2_toy_inputs())
+    inputs[6] = torch.tensor([[2], [1]], dtype=torch.long)
+    inputs[7] = torch.randn(1, 114)
+    baseline = model(*inputs)["rna_delta"]
+    inputs[4] = inputs[4].clone()
+    inputs[4][2] = (inputs[4][2] + 5) % 20
+    changed_partner = model(*inputs)["rna_delta"]
+    assert torch.count_nonzero(baseline - changed_partner) > 0
+    inputs[4] = torch.tensor([1, 2, 3, 4], dtype=torch.long)
+    inputs[4][0] = (inputs[4][0] + 5) % 20
+    changed_nonpartner = model(*inputs)["rna_delta"]
+    assert torch.allclose(baseline, changed_nonpartner)
+
+
 @pytest.mark.skipif(not (PROTEIN_PDB.exists() and RNA_PDB.exists() and PROTEIN_CHECKPOINT.exists() and RNA_CHECKPOINT.exists()), reason="frozen prior fixtures are not present")
 def test_wrappers_reproduce_pinned_prior_probabilities():
     device = torch.device("cpu")
