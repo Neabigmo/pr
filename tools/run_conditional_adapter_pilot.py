@@ -455,7 +455,7 @@ def _prepare_one(row: pd.Series, args, p_prior, r_prior, device: torch.device, v
     r_view_chains = view_chain_ids(source_chain_order(source, rchains))
     edge, p_records, r_records = build_cross_edges(
         source, str(row.sample_id), pchains, rchains,
-        radius_angstrom=float(args.cache_radius), max_neighbors=int(args.cache_neighbors), bins=16, geometry_mode="G2",
+        radius_angstrom=float(args.cache_radius), max_neighbors=int(args.cache_neighbors), bins=16, geometry_mode=str(args.geometry_mode),
         candidate_neighbors=int(args.cache_neighbors),
         coordinate_noise_angstrom=float(args.noise), noise_seed=int(args.seed),
     )
@@ -541,7 +541,7 @@ def _prepare_one(row: pd.Series, args, p_prior, r_prior, device: torch.device, v
         "edge_geometry": torch.from_numpy(edge.features).float(),
         "metadata": {
             "protein_view": str(p_view), "rna_view": str(r_view), "protein_view_chains": p_view_chains, "rna_view_chains": r_view_chains, "cache_radius": float(args.cache_radius),
-            "cache_neighbors": int(args.cache_neighbors), "coordinate_noise_angstrom": float(args.noise), "prior_checkpoint_protein": str(args.protein_checkpoint),
+            "cache_neighbors": int(args.cache_neighbors), "geometry_mode": str(args.geometry_mode), "coordinate_noise_angstrom": float(args.noise), "prior_checkpoint_protein": str(args.protein_checkpoint),
             "prior_checkpoint_rna": str(args.rna_checkpoint), "no_test_used": split_name != "test", "split": split_name,
         },
     }
@@ -720,10 +720,11 @@ def _collate_payloads(payloads: list[dict], device: torch.device) -> dict[str, t
         geometries_p2r.append(payload["_selected_geometry_p2r"])
     p_sample = torch.cat([torch.full((length,), index, dtype=torch.long) for index, length in enumerate(p_lengths)])
     r_sample = torch.cat([torch.full((length,), index, dtype=torch.long) for index, length in enumerate(r_lengths)])
+    geometry_dim = int(payloads[0]["edge_geometry"].shape[-1]) if payloads else 114
     edge_index_r2p = torch.cat(edges_r2p, dim=1) if edges_r2p else torch.zeros((2, 0), dtype=torch.long)
-    edge_geometry_r2p = torch.cat(geometries_r2p, dim=0) if geometries_r2p else torch.zeros((0, 114), dtype=torch.float32)
+    edge_geometry_r2p = torch.cat(geometries_r2p, dim=0) if geometries_r2p else torch.zeros((0, geometry_dim), dtype=torch.float32)
     edge_index_p2r = torch.cat(edges_p2r, dim=1) if edges_p2r else torch.zeros((2, 0), dtype=torch.long)
-    edge_geometry_p2r = torch.cat(geometries_p2r, dim=0) if geometries_p2r else torch.zeros((0, 114), dtype=torch.float32)
+    edge_geometry_p2r = torch.cat(geometries_p2r, dim=0) if geometries_p2r else torch.zeros((0, geometry_dim), dtype=torch.float32)
     def cat(name: str) -> torch.Tensor:
         return torch.cat([item[name] for item in payloads], dim=0)
     protein_active = torch.cat([item["_selected_protein_active"] for item in payloads], dim=0)
@@ -1089,7 +1090,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--force", action="store_true")
     audit = sub.add_parser("audit"); common(audit); audit.add_argument("--workers", type=int, default=12); audit.set_defaults(func=run_audit)
     balance = sub.add_parser("balance"); common(balance); balance.add_argument("--cache", type=Path, required=True); balance.add_argument("--workers", type=int, default=12); balance.add_argument("--radius", type=float, default=14.357456359863283); balance.add_argument("--shared-k", type=int, default=51); balance.add_argument("--r2p-k", type=int, default=8); balance.add_argument("--p2r-k", type=int, default=12); balance.set_defaults(func=run_balance_report)
-    prep = sub.add_parser("prepare"); common(prep); prep.add_argument("--checkouts", type=Path, default=DEFAULT_CHECKOUTS); prep.add_argument("--protein-checkpoint", type=Path, default=DEFAULT_P_CHECKPOINT); prep.add_argument("--rna-checkpoint", type=Path, default=DEFAULT_R_CHECKPOINT); prep.add_argument("--cache-radius", type=float, default=16.0); prep.add_argument("--cache-neighbors", type=int, default=32); prep.add_argument("--noise", type=float, default=0.0); prep.add_argument("--cache-dir", type=Path); prep.add_argument("--splits", nargs="+", choices=("train", "val", "test"), default=("train", "val")); prep.set_defaults(func=run_prepare)
+    prep = sub.add_parser("prepare"); common(prep); prep.add_argument("--checkouts", type=Path, default=DEFAULT_CHECKOUTS); prep.add_argument("--protein-checkpoint", type=Path, default=DEFAULT_P_CHECKPOINT); prep.add_argument("--rna-checkpoint", type=Path, default=DEFAULT_R_CHECKPOINT); prep.add_argument("--cache-radius", type=float, default=16.0); prep.add_argument("--cache-neighbors", type=int, default=32); prep.add_argument("--geometry-mode", choices=("G0", "G1", "G2", "G3"), default="G2"); prep.add_argument("--noise", type=float, default=0.0); prep.add_argument("--cache-dir", type=Path); prep.add_argument("--splits", nargs="+", choices=("train", "val", "test"), default=("train", "val")); prep.set_defaults(func=run_prepare)
     screen = sub.add_parser("screen"); common(screen); screen.add_argument("--cache", type=Path, required=True); screen.add_argument("--radius", type=float); screen.add_argument("--neighbors", type=int); screen.add_argument("--lr", type=float, default=3e-4); screen.add_argument("--epochs", type=int, default=60); screen.add_argument("--patience", type=int, default=18); screen.add_argument("--batch-size", type=int, default=16); screen.set_defaults(func=run_screen)
     balance_train = sub.add_parser("balance-train"); common(balance_train); balance_train.add_argument("--cache", type=Path, required=True); balance_train.add_argument("--radius", type=float, default=14.357456359863283); balance_train.add_argument("--shared-k", type=int, default=51); balance_train.add_argument("--r2p-k", type=int, default=8); balance_train.add_argument("--p2r-k", type=int, default=12); balance_train.add_argument("--lr", type=float, default=3e-4); balance_train.add_argument("--epochs", type=int, default=60); balance_train.add_argument("--patience", type=int, default=18); balance_train.add_argument("--batch-size", type=int, default=16); balance_train.set_defaults(func=run_balance)
     ev = sub.add_parser("evaluate"); common(ev); ev.add_argument("--cache", type=Path, required=True); ev.add_argument("--test-cache", type=Path, required=True); ev.add_argument("--checkpoint", type=Path, required=True); ev.add_argument("--common-tokens", type=Path); ev.set_defaults(func=run_evaluate)

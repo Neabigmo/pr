@@ -245,7 +245,10 @@ def evaluate_dataset(
                 null = native[null_key].detach().float().cpu()
                 add(f"{polymer}_null_weight_mean", float(null.mean()))
                 add(f"{polymer}_null_weight_median", float(null.median()))
-                add(f"{polymer}_gate", float(native[gate_key].detach().float().cpu()))
+                # Scalar gates are used by legacy V2; confidence gates are
+                # position-wise.  Report one comparable mean without making
+                # the evaluator depend on the residual implementation.
+                add(f"{polymer}_gate", float(native[gate_key].detach().float().mean().cpu()))
                 delta = native[delta_key]
                 delta_rms = delta.pow(2).mean(dim=-1).sqrt()
                 prior_rms = base.pow(2).mean(dim=-1).sqrt()

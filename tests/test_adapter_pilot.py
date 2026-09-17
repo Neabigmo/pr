@@ -5,7 +5,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from pr_pilot.adapter_pilot.geometry import _one_feature
+from pr_pilot.adapter_pilot.geometry import _one_feature, geometry_dimension
+from pr_pilot.adapter_pilot.joint import AdapterJointModel, AdapterJointPayload
 from pr_pilot.adapter_pilot.model import AdapterConfig, ReciprocalAdapter
 from pr_pilot.adapter_pilot.priors import NAMPrior, ProteinMPNNPrior, RNA_MODEL_COLUMNS, _protein_features
 
@@ -204,6 +205,85 @@ def test_v2_directional_indexing_uses_target_and_partner_axes():
     inputs[4][0] = (inputs[4][0] + 5) % 20
     changed_nonpartner = model(*inputs)["rna_delta"]
     assert torch.allclose(baseline, changed_nonpartner)
+
+
+def test_g3_geometry_is_sequence_neutral_and_has_expected_width():
+    rng = np.random.default_rng(17)
+    p_rich = rng.normal(size=(5, 3)).astype(np.float32)
+    r_rich = rng.normal(size=(11, 3)).astype(np.float32)
+    p_valid = np.ones(5, dtype=bool)
+    r_valid = np.ones(11, dtype=bool)
+    value = _one_feature(
+        np.asarray([[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]], dtype=np.float32),
+        np.ones(2, dtype=bool),
+        np.eye(3, dtype=np.float32),
+        True,
+        np.asarray([[4.0, 1.0, 2.0], [5.0, 2.0, 1.0], [3.0, 4.0, 2.0]], dtype=np.float32),
+        np.ones(3, dtype=bool),
+        np.eye(3, dtype=np.float32),
+        True,
+        np.asarray([1.0, 2.0, 3.0], dtype=np.float32),
+        np.asarray([4.0, 1.0, 2.0], dtype=np.float32),
+        16,
+        "G3",
+        p_rich,
+        p_valid,
+        r_rich,
+        r_valid,
+    )
+    assert value.shape == (geometry_dimension("G3", 16),)
+    assert np.isfinite(value).all()
+
+
+def test_known_partner_mask_blocks_only_unknown_edges():
+    model = _v2_model()
+    inputs = list(_v2_toy_inputs())
+    known = torch.tensor([True, False, True])
+    masked = model(*inputs, rna_known=known)
+    off = model(*inputs, token_off=True)
+    assert not torch.allclose(masked["protein_delta"][0], off["protein_delta"][0], atol=1e-6)
+    assert torch.allclose(masked["protein_delta"][1], off["protein_delta"][1], atol=1e-6)
+
+
+@pytest.mark.parametrize("interaction", ["concat", "centered", "multiplicative", "film"])
+def test_scientific_interaction_modes_construct_and_forward(interaction):
+    model = _v2_model(interaction=interaction, residual="partner_centered")
+    out = model(*_v2_toy_inputs())
+    assert out["protein_logits"].shape[-1] == 20
+    assert out["rna_logits"].shape[-1] == 4
+
+
+def test_confidence_gate_is_positionwise():
+    model = _v2_model(residual="confidence_gate")
+    out = model(*_v2_toy_inputs())
+    assert out["protein_gate"].shape == (4,)
+    assert out["rna_gate"].shape == (3,)
+
+
+def test_adapter_joint_bridge_uses_known_masks():
+    base_inputs = _v2_toy_inputs()
+    adapter = _v2_model(residual="partner_centered")
+    bridge = AdapterJointModel(adapter)
+
+    class Sample:
+        pass
+
+    sample = Sample()
+    sample.pr = object()
+    bridge.register(
+        sample,
+        AdapterJointPayload(
+            protein_base=base_inputs[0], rna_base=base_inputs[1], protein_hidden=base_inputs[2], rna_hidden=base_inputs[3],
+            edge_index_r2p=base_inputs[6], edge_geometry_r2p=base_inputs[7], edge_index_p2r=base_inputs[6], edge_geometry_p2r=base_inputs[7],
+        ),
+    )
+    out = bridge(
+        torch.empty(0), torch.empty(2, 0, dtype=torch.long), torch.empty(0),
+        torch.empty(0), torch.empty(2, 0, dtype=torch.long), torch.empty(0), sample.pr,
+        base_inputs[4], base_inputs[5], torch.ones(4, dtype=torch.bool), torch.tensor([True, False, True]),
+    )
+    assert torch.allclose(out["protein_delta"][1], torch.zeros_like(out["protein_delta"][1]), atol=1e-6)
+    assert torch.count_nonzero(out["protein_delta"][0]) > 0
 
 
 @pytest.mark.skipif(not (PROTEIN_PDB.exists() and RNA_PDB.exists() and PROTEIN_CHECKPOINT.exists() and RNA_CHECKPOINT.exists()), reason="frozen prior fixtures are not present")

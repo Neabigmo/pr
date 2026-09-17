@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""Single-seed scientific Adapter pilot orchestration.
+
+This runner deliberately shares the existing cache, grouped-fold and metric
+implementations, but uses a new protocol layer: one seed, direction-specific
+K, ratio-first selection, late partner-shuffle promotion, and bounded
+checkpoint retention.  It never reads a test cache during ``preflight`` or
+``search``.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import torch
+
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO / "src") not in sys.path:
+    sys.path.insert(0, str(REPO / "src"))
+if str(REPO / "tools") not in sys.path:
+    sys.path.insert(0, str(REPO / "tools"))
+
+from pr_pilot.adapter_pilot.model import AdapterConfig, ReciprocalAdapter
+from pr_pilot.adapter_pilot.scientific import (  # noqa: E402
+    AGGREGATIONS,
+    GEOMETRY_MODES,
+    INTERACTIONS,
+    K_CONFIGS,
+    RESIDUALS,
+    SINGLE_SEED,
+    ScientificProtocol,
+    choose_candidate,
+    validate_length_bounds,
+    write_protocol,
+)
+from pr_pilot.training.checkpointing import CheckpointManager  # noqa: E402
+from run_adapter_v2_cv import (  # noqa: E402
+    RADIUS,
+    _aggregate_cv,
+    _attach_selected_edges,
+    _batched_loss,
+    _collate_payloads,
+    _forward_payload,
+    _load_cache,
+    build_grouped_folds,
+    evaluate_dataset,
+)
+
+DEFAULT_CACHE = Path(r"F:\111临时\PR PILOT\pilot_conditional_adapter_20260916\cache\noise0p0")
+DEFAULT_MANIFESTS = Path(r"F:\111临时\PR PILOT\remote_return_20260911\manifests\round_20260905_exception_v2")
+DEFAULT_OUT = Path(r"I:\PR_PILOT_SCIENTIFIC\20260917\reports")
+
+
+def _seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _config(spec: dict) -> AdapterConfig:
+    interaction = str(spec.get("interaction", "concat"))
+    residual = str(spec.get("residual", "direct"))
+    centered = interaction == "centered" or residual == "partner_centered"
+    return AdapterConfig(
+        geometry=str(spec.get("geometry", "G2")),
+        aggregation=str(spec.get("aggregation", "A2")),
+        interaction=interaction,
+        residual=residual,
+        hidden_dim=128,
+        hidden_projection_dim=64,
+        edge_dim=64,
+        token_dim=64,
+        message_dim=128,
+        layers=1,
+        dropout=0.1,
+        rbf_bins=16,
+        separate_edge_encoders=bool(spec.get("separate_edge_encoders", False)),
+        sequence_independent_attention=True,
+        partner_centered_residual=centered,
+        modality_projector=bool(spec.get("modality_projector", True)),
+        conservative_gate=residual == "scalar_gate",
+        gate_init=0.1,
+    )
+
+
+def _scalar_metrics(metrics: dict) -> dict[str, float]:
+    result = {}
+    for key, value in metrics.items():
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            result[key] = float(value)
+    return result
+
+
+def _score(metrics: dict) -> float:
+    return max(float(metrics["protein_interface_ratio"]), float(metrics["rna_interface_ratio"]))
+
+
+def _train_fold(
+    spec: dict,
+    fold: dict,
+    by_id: dict[str, dict],
+    args: argparse.Namespace,
+    target: Path,
+) -> dict:
+    seed = int(args.seed)
+    _seed_everything(seed)
+    train_data = [by_id[sample_id] for sample_id in fold["train_sample_ids"]]
+    val_data = [by_id[sample_id] for sample_id in fold["val_sample_ids"]]
+    r2p_k = int(spec.get("r2p_k", args.r2p_k))
+    p2r_k = int(spec.get("p2r_k", args.p2r_k))
+    _attach_selected_edges(train_data, args.radius, args.neighbors, r2p_k, p2r_k, True)
+    _attach_selected_edges(val_data, args.radius, args.neighbors, r2p_k, p2r_k, True)
+    model = ReciprocalAdapter(_config(spec)).to(args.device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.lr), weight_decay=1e-3)
+    manager = CheckpointManager(target, "selection_score")
+    start_epoch = 1
+    if args.resume and (target / "last.pt").exists():
+        start_epoch = manager.restore_last(model, optimizer, map_location=args.device)
+    order_rng = random.Random(seed + 1009 * int(fold["fold"]))
+    bad = 0
+    best_score = float("inf")
+    if (target / "best.pt").exists():
+        best_payload = torch.load(target / "best.pt", map_location="cpu", weights_only=False)
+        best_score = float(best_payload["metrics"]["selection_score"])
+    epochs_run = max(0, start_epoch - 1)
+    for epoch in range(start_epoch, int(args.epochs) + 1):
+        started = time.perf_counter()
+        model.train()
+        order = list(range(len(train_data)))
+        order_rng.shuffle(order)
+        losses = []
+        for start in range(0, len(order), int(args.batch_size)):
+            payloads = [train_data[index] for index in order[start : start + int(args.batch_size)]]
+            packed = _collate_payloads(payloads, args.device)
+            optimizer.zero_grad(set_to_none=True)
+            out = model(
+                packed["protein_base"], packed["rna_base"], packed["protein_hidden"], packed["rna_hidden"],
+                packed["protein_native"], packed["rna_native"], packed["edge_index_r2p"], packed["edge_geometry_r2p"],
+                packed["edge_index_p2r"], packed["edge_geometry_p2r"],
+            )
+            p_loss = _batched_loss(out["protein_logits"], packed["protein_native"], packed["protein_active"], packed["protein_sample"], packed["batch_size"])
+            r_loss = _batched_loss(out["rna_logits"], packed["rna_native"], packed["rna_active"], packed["rna_sample"], packed["batch_size"])
+            p_prior = _batched_loss(packed["protein_base"].detach(), packed["protein_native"], packed["protein_active"], packed["protein_sample"], packed["batch_size"], log_probs=True)
+            r_prior = _batched_loss(packed["rna_base"].detach(), packed["rna_native"], packed["rna_active"], packed["rna_sample"], packed["batch_size"], log_probs=True)
+            loss = 0.5 * (p_loss / p_prior.clamp_min(1e-8) + r_loss / r_prior.clamp_min(1e-8))
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            losses.append(float(loss.detach().cpu()))
+        model.eval()
+        validation = evaluate_dataset(model, val_data, args.device, args.radius, args.neighbors, include_permutation=False)
+        scalar = _scalar_metrics(validation)
+        scalar["train_loss"] = float(np.mean(losses)) if losses else float("nan")
+        scalar["selection_score"] = _score(validation)
+        scalar["epoch_seconds"] = time.perf_counter() - started
+        metadata = {"spec": spec, "fold": int(fold["fold"]), "seed": seed, "r2p_k": r2p_k, "p2r_k": p2r_k, "radius": args.radius}
+        improved = manager.save_epoch(model, optimizer, None, epoch, scalar, metadata)
+        epochs_run = epoch
+        if improved:
+            best_score = scalar["selection_score"]
+            bad = 0
+        else:
+            bad += 1
+        if bad >= int(args.patience):
+            break
+
+    best_path = target / "best.pt"
+    if not best_path.exists():
+        raise RuntimeError(f"no best checkpoint produced for {target}")
+    best = torch.load(best_path, map_location=args.device, weights_only=False)
+    model.load_state_dict(best["model"])
+    model.eval()
+    validation = evaluate_dataset(model, val_data, args.device, args.radius, args.neighbors, include_permutation=True)
+    scalar = _scalar_metrics(validation)
+    scalar["specificity_mean"] = float(np.nanmean([
+        scalar.get("protein_native_minus_permutation_interface_nll", np.nan),
+        scalar.get("rna_native_minus_permutation_interface_nll", np.nan),
+    ]))
+    summary = {
+        "spec": spec,
+        "fold": int(fold["fold"]),
+        "seed": seed,
+        "train_complexes": len(train_data),
+        "val_complexes": len(val_data),
+        "epochs_run": epochs_run,
+        "best_epoch": int(best["epoch"]),
+        "selection_score": best_score,
+        "validation": scalar,
+        "checkpoint": str(best_path),
+        "last_checkpoint": str(target / "last.pt"),
+        "test_read": False,
+    }
+    (target / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False, default=float), encoding="utf-8")
+    return summary
+
+
+def _stage_specs(stage: str, base: dict) -> list[dict]:
+    if stage == "geometry":
+        return [{**base, "geometry": value} for value in GEOMETRY_MODES]
+    if stage == "k":
+        return [{**base, "r2p_k": r2p, "p2r_k": p2r} for r2p, p2r in K_CONFIGS]
+    if stage == "aggregation":
+        return [{**base, "aggregation": value} for value in AGGREGATIONS]
+    if stage == "interaction":
+        return [{**base, "interaction": value} for value in INTERACTIONS]
+    if stage == "residual":
+        return [{**base, "residual": value} for value in RESIDUALS]
+    raise ValueError(f"unknown search stage {stage}")
+
+
+def _spec_name(spec: dict) -> str:
+    fields = [spec.get("geometry"), spec.get("r2p_k"), spec.get("p2r_k"), spec.get("aggregation"), spec.get("interaction"), spec.get("residual")]
+    return "_".join(str(value).replace(".", "p") for value in fields)
+
+
+def run_preflight(args: argparse.Namespace) -> dict:
+    manifests = Path(args.manifests)
+    protocol = ScientificProtocol(seed=int(args.seed))
+    reports = {}
+    for split in ("train", "val"):
+        frame = pd.read_csv(manifests / f"complex_{split}.tsv", sep="\t")
+        reports[split] = validate_length_bounds(frame, protocol)
+        if reports[split]["protein_out_of_range"] or reports[split]["rna_out_of_range"]:
+            raise ValueError(f"{split} manifest violates the scientific length protocol: {reports[split]}")
+    folds = build_grouped_folds(manifests, 3, int(args.seed))
+    result = {
+        "protocol": protocol.as_dict(),
+        "manifests": str(manifests),
+        "development_length_audit": reports,
+        "folds": [{"fold": f["fold"], "train": f["n_train"], "val": f["n_val"]} for f in folds],
+        "test_read": False,
+        "cache_root": str(args.cache_root),
+    }
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    write_protocol(out / "preflight.json", protocol, result)
+    print(json.dumps(result, indent=2, ensure_ascii=False), flush=True)
+    return result
+
+
+def run_search(args: argparse.Namespace) -> dict:
+    if "test" in str(args.cache_root).lower() or "test" in str(args.manifests).lower():
+        raise ValueError("scientific search refuses test caches/manifests")
+    data = _load_cache(Path(args.cache_root), "train") + _load_cache(Path(args.cache_root), "val")
+    by_id = {str(payload["sample_id"]): payload for payload in data}
+    folds = build_grouped_folds(Path(args.manifests), 3, int(args.seed))
+    expected = set(sample_id for fold in folds for sample_id in fold["train_sample_ids"])
+    if set(by_id) != expected:
+        raise ValueError("cache IDs do not exactly match development grouped folds")
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    write_protocol(out / "protocol.json", ScientificProtocol(seed=int(args.seed)), {"test_read": False})
+    base = {
+        "geometry": "G2", "r2p_k": int(args.r2p_k), "p2r_k": int(args.p2r_k),
+        "aggregation": "A2", "interaction": "concat", "residual": "partner_centered",
+        "separate_edge_encoders": False, "modality_projector": True,
+    }
+    stage_order = [args.stage] if args.stage != "all" else ["geometry", "k", "aggregation", "interaction", "residual"]
+    selected = base
+    reports = {}
+    for stage in stage_order:
+        specs = _stage_specs(stage, selected)
+        candidates = []
+        for spec in specs:
+            name = _spec_name(spec)
+            fold_summaries = []
+            for fold in folds:
+                target = out / "search" / stage / name / f"fold{fold['fold']}"
+                if (target / "summary.json").exists() and not args.force:
+                    summary = json.loads((target / "summary.json").read_text(encoding="utf-8"))
+                else:
+                    summary = _train_fold(spec, fold, by_id, args, target)
+                fold_summaries.append(summary)
+                print(json.dumps({"stage": stage, "candidate": name, "fold": fold["fold"], "score": summary["selection_score"]}, ensure_ascii=False), flush=True)
+            metrics = {
+                "protein_interface_ratio": float(np.mean([item["validation"]["protein_interface_ratio"] for item in fold_summaries])),
+                "rna_interface_ratio": float(np.mean([item["validation"]["rna_interface_ratio"] for item in fold_summaries])),
+                "specificity_mean": float(np.nanmean([item["validation"]["specificity_mean"] for item in fold_summaries])),
+            }
+            candidates.append({"name": name, "spec": spec, "metrics": metrics, "folds": fold_summaries})
+        stage_choice = choose_candidate(candidates)
+        selected = dict(stage_choice["spec"])
+        reports[stage] = {"selected": stage_choice, "candidates": candidates}
+        (out / "search" / stage / "summary.json").parent.mkdir(parents=True, exist_ok=True)
+        (out / "search" / stage / "summary.json").write_text(json.dumps(reports[stage], indent=2, ensure_ascii=False, default=float), encoding="utf-8")
+    result = {"selected": selected, "stages": reports, "seed": int(args.seed), "test_read": False}
+    (out / "search_summary.json").write_text(json.dumps(result, indent=2, ensure_ascii=False, default=float), encoding="utf-8")
+    print(json.dumps({"selected": selected, "test_read": False}, indent=2, ensure_ascii=False), flush=True)
+    return result
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--manifests", type=Path, default=DEFAULT_MANIFESTS)
+    common.add_argument("--cache-root", type=Path, default=DEFAULT_CACHE)
+    common.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    common.add_argument("--seed", type=int, default=SINGLE_SEED)
+    preflight = sub.add_parser("preflight", parents=[common])
+    preflight.set_defaults(func=run_preflight)
+    search = sub.add_parser("search", parents=[common])
+    search.add_argument("--stage", choices=("all", "geometry", "k", "aggregation", "interaction", "residual"), default="all")
+    search.add_argument("--device", default="cuda:0")
+    search.add_argument("--radius", type=float, default=RADIUS)
+    search.add_argument("--neighbors", type=int, default=32)
+    search.add_argument("--r2p-k", type=int, default=8)
+    search.add_argument("--p2r-k", type=int, default=12)
+    search.add_argument("--lr", type=float, default=3e-4)
+    search.add_argument("--epochs", type=int, default=60)
+    search.add_argument("--patience", type=int, default=18)
+    search.add_argument("--batch-size", type=int, default=16)
+    search.add_argument("--resume", action="store_true")
+    search.add_argument("--force", action="store_true")
+    search.set_defaults(func=run_search)
+    return parser
+
+
+if __name__ == "__main__":
+    parsed = build_parser().parse_args()
+    if hasattr(parsed, "device"):
+        parsed.device = torch.device(parsed.device)
+    parsed.func(parsed)

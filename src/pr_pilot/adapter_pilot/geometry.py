@@ -19,7 +19,23 @@ from pr_pilot.runtime.gemmi_adapter import GemmiStructureAdapter
 
 P_ANCHORS = ("CA", "VCB")
 R_ANCHORS = ("C1'", "P", "VN")
+P_RICH_ANCHORS = ("N", "CA", "C", "O", "VCB")
+R_RICH_ANCHORS = ("P", "O5'", "C5'", "C4'", "O4'", "C3'", "O3'", "C2'", "O2'", "C1'", "VN")
 FULL_GEOMETRY_DIM = 114  # 6*16 RBF + 6 masks + 3+3 directions + 6D rotation
+
+
+def geometry_dimension(mode: str, bins: int = 16) -> int:
+    """Return the feature width for a sequence-neutral geometry mode."""
+    if mode == "G0":
+        return bins + 1
+    if mode == "G1":
+        return len(P_ANCHORS) * len(R_ANCHORS) * (bins + 1)
+    if mode == "G2":
+        return FULL_GEOMETRY_DIM if bins == 16 else len(P_ANCHORS) * len(R_ANCHORS) * (bins + 1) + 12
+    if mode == "G3":
+        rich_dim = len(P_RICH_ANCHORS) * len(R_RICH_ANCHORS) * (bins + 1)
+        return geometry_dimension("G2", bins) + rich_dim
+    raise ValueError(f"unknown geometry mode: {mode}")
 
 
 @dataclass(frozen=True)
@@ -72,7 +88,7 @@ def _jitter_atoms(record, rng: np.random.Generator | None, noise: float) -> dict
     return atoms
 
 
-def _protein_anchors(record, rng: np.random.Generator | None = None, noise: float = 0.0) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, np.ndarray]:
+def _protein_anchors(record, rng: np.random.Generator | None = None, noise: float = 0.0) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, np.ndarray, np.ndarray, np.ndarray]:
     atoms = _jitter_atoms(record, rng, noise)
     if all(name in atoms for name in ("N", "CA", "C")):
         atoms["VCB"] = virtual_cb(atoms["N"], atoms["CA"], atoms["C"])
@@ -84,10 +100,20 @@ def _protein_anchors(record, rng: np.random.Generator | None = None, noise: floa
         values.append(np.asarray(value if ok else np.zeros(3), dtype=np.float32))
         valid.append(bool(ok))
     frame, frame_ok = _frame(atoms.get("CA", np.zeros(3)), atoms.get("C"), atoms.get("N"))
-    return np.stack(values), np.asarray(valid, dtype=bool), frame, frame_ok, atoms["CA"]
+    rich_values: list[np.ndarray] = []
+    rich_valid: list[bool] = []
+    for name in P_RICH_ANCHORS:
+        value = atoms.get(name)
+        ok = value is not None and np.isfinite(value).all()
+        rich_values.append(np.asarray(value if ok else np.zeros(3), dtype=np.float32))
+        rich_valid.append(bool(ok))
+    return (
+        np.stack(values), np.asarray(valid, dtype=bool), frame, frame_ok, atoms["CA"],
+        np.stack(rich_values), np.asarray(rich_valid, dtype=bool),
+    )
 
 
-def _rna_anchors(record, rng: np.random.Generator | None = None, noise: float = 0.0) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, np.ndarray]:
+def _rna_anchors(record, rng: np.random.Generator | None = None, noise: float = 0.0) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool, np.ndarray, np.ndarray, np.ndarray]:
     atoms = _jitter_atoms(record, rng, noise)
     vn, vn_ok = _virtual_na_n(atoms)
     values: list[np.ndarray] = []
@@ -102,7 +128,17 @@ def _rna_anchors(record, rng: np.random.Generator | None = None, noise: float = 
         valid.append(finite)
     origin = atoms.get("C1'", np.zeros(3))
     frame, frame_ok = _frame(origin, atoms.get("O4'"), atoms.get("C2'"))
-    return np.stack(values), np.asarray(valid, dtype=bool), frame, frame_ok, atoms["C1'"]
+    rich_values: list[np.ndarray] = []
+    rich_valid: list[bool] = []
+    for name in R_RICH_ANCHORS:
+        value = vn if name == "VN" else atoms.get(name)
+        ok = value is not None and np.isfinite(value).all()
+        rich_values.append(np.asarray(value if ok else np.zeros(3), dtype=np.float32))
+        rich_valid.append(bool(ok))
+    return (
+        np.stack(values), np.asarray(valid, dtype=bool), frame, frame_ok, atoms["C1'"],
+        np.stack(rich_values), np.asarray(rich_valid, dtype=bool),
+    )
 
 
 def _one_feature(
@@ -118,6 +154,10 @@ def _one_feature(
     r_ref: np.ndarray,
     bins: int,
     mode: str,
+    p_rich_anchor: np.ndarray | None = None,
+    p_rich_valid: np.ndarray | None = None,
+    r_rich_anchor: np.ndarray | None = None,
+    r_rich_valid: np.ndarray | None = None,
 ) -> np.ndarray:
     mask = p_valid[:, None] & r_valid[None, :]
     distances = np.linalg.norm(p_anchor[:, None, :] - r_anchor[None, :, :], axis=-1)
@@ -130,7 +170,17 @@ def _one_feature(
     base = np.concatenate(distance_blocks + [mask.astype(np.float32).reshape(-1)])
     if mode == "G1":
         return base
-    if mode != "G2":
+    if mode == "G3":
+        if p_rich_anchor is None or p_rich_valid is None or r_rich_anchor is None or r_rich_valid is None:
+            raise ValueError("G3 requires rich sequence-neutral anchors and validity masks")
+        rich_mask = p_rich_valid[:, None] & r_rich_valid[None, :]
+        rich_distances = np.linalg.norm(p_rich_anchor[:, None, :] - r_rich_anchor[None, :, :], axis=-1)
+        rich_blocks = [
+            rbf(np.asarray([distance if valid else 20.0], dtype=np.float32), bins=bins).reshape(-1) * float(valid)
+            for distance, valid in zip(rich_distances.reshape(-1), rich_mask.reshape(-1))
+        ]
+        rich_base = np.concatenate(rich_blocks + [rich_mask.astype(np.float32).reshape(-1)])
+    elif mode != "G2":
         raise ValueError(f"unknown geometry mode: {mode}")
     if p_frame_ok and r_frame_ok:
         delta = r_ref - p_ref
@@ -147,7 +197,10 @@ def _one_feature(
         forward = np.zeros(3, dtype=np.float32)
         reverse = np.zeros(3, dtype=np.float32)
         rotation6 = np.zeros(6, dtype=np.float32)
-    return np.concatenate([base, forward, reverse, rotation6]).astype(np.float32)
+    g2 = np.concatenate([base, forward, reverse, rotation6]).astype(np.float32)
+    if mode == "G3":
+        return np.concatenate([g2, rich_base]).astype(np.float32)
+    return g2
 
 
 def _records(adapter: GemmiStructureAdapter, structure_path, sample_id: str, polymer: str, chains: Sequence[str]):
@@ -186,8 +239,8 @@ def build_cross_edges(
     r_values = [_rna_anchors(record, rng, float(coordinate_noise_angstrom)) for record in r_records]
     candidates: list[tuple[int, int, float]] = []
     pair_features: dict[tuple[int, int], np.ndarray] = {}
-    for i, (pa, pm, pf, pf_ok, p_ref) in enumerate(p_values):
-        for j, (ra, rm, rf, rf_ok, r_ref) in enumerate(r_values):
+    for i, (pa, pm, pf, pf_ok, p_ref, p_rich, p_rich_valid) in enumerate(p_values):
+        for j, (ra, rm, rf, rf_ok, r_ref, r_rich, r_rich_valid) in enumerate(r_values):
             valid = pm[:, None] & rm[None, :]
             if not valid.any():
                 continue
@@ -198,6 +251,7 @@ def build_cross_edges(
                 pair_features[(i, j)] = _one_feature(
                     pa, pm, pf, pf_ok, ra, rm, rf, rf_ok,
                     p_ref, r_ref, bins, geometry_mode,
+                    p_rich, p_rich_valid, r_rich, r_rich_valid,
                 )
     keep: set[tuple[int, int]] = set()
     for i in range(len(p_records)):
@@ -220,7 +274,7 @@ def build_cross_edges(
         raise ValueError(f"No valid cross edge for {sample_id} under radius={radius_angstrom}, K={max_neighbors}")
     distance_map = {(i, j): d for i, j, d in candidates}
     features = np.stack([pair_features[(i, j)] for i, j in ordered]).astype(np.float32)
-    dims = {"G0": bins + 1, "G1": 6 * bins + 6, "G2": FULL_GEOMETRY_DIM}
+    dims = {mode: geometry_dimension(mode, bins) for mode in ("G0", "G1", "G2", "G3")}
     if features.shape[1] != dims[geometry_mode]:
         raise AssertionError(f"cross geometry dimension drift: {features.shape[1]} != {dims[geometry_mode]}")
     result = CrossEdgeSet(

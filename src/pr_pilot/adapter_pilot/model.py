@@ -7,11 +7,15 @@ import math
 import torch
 from torch import Tensor, nn
 
+from .geometry import geometry_dimension
+
 
 @dataclass(frozen=True)
 class AdapterConfig:
     geometry: str = "G2"
     aggregation: str = "A2"
+    interaction: str = "concat"
+    residual: str = "direct"
     hidden_dim: int = 128
     hidden_projection_dim: int = 64
     edge_dim: int = 64
@@ -54,18 +58,26 @@ class _Direction(nn.Module):
         conservative_gate: bool = False,
         gate_init: float = 0.1,
         correct_null_softmax: bool = False,
+        interaction: str = "concat",
+        residual: str = "direct",
     ):
         super().__init__()
         if not 0.0 < gate_init < 1.0:
             raise ValueError("gate_init must be strictly between zero and one")
         if aggregation not in {"A0", "A1", "A2"}:
             raise ValueError(f"unknown aggregation {aggregation}")
-        if partner_centered_residual and not sequence_independent_attention:
+        if interaction not in {"concat", "centered", "multiplicative", "film"}:
+            raise ValueError(f"unknown interaction {interaction}")
+        if residual not in {"direct", "partner_centered", "scalar_gate", "confidence_gate"}:
+            raise ValueError(f"unknown residual {residual}")
+        if (partner_centered_residual or interaction == "centered" or residual == "partner_centered") and not sequence_independent_attention:
             raise ValueError("partner-centered residual requires sequence-independent attention")
 
         self.token_embedding = nn.Embedding(partner_vocab, token_dim)
         self.sequence_independent_attention = bool(sequence_independent_attention)
         self.partner_centered_residual = bool(partner_centered_residual)
+        self.interaction = str(interaction)
+        self.residual = str(residual)
         self.correct_null_softmax = bool(correct_null_softmax)
         self.aggregation = aggregation
 
@@ -77,7 +89,14 @@ class _Direction(nn.Module):
             self.partner_norm = nn.LayerNorm(hidden_dim)
             content_dim = hidden_dim * 2 + edge_dim
             self.content = _mlp(content_dim, message_dim, layers, dropout)
-            self.value = _mlp(message_dim + token_dim, message_dim, layers, dropout)
+            if interaction == "film":
+                self.film = nn.Linear(token_dim, message_dim * 2)
+                self.value = _mlp(message_dim, message_dim, layers, dropout)
+            elif interaction == "multiplicative":
+                self.token_projection = nn.Linear(token_dim, message_dim)
+                self.value = _mlp(message_dim, message_dim, layers, dropout)
+            else:
+                self.value = _mlp(message_dim + token_dim, message_dim, layers, dropout)
         else:
             # Compatibility path for the original B0/B1 Adapter. Its
             # attention score still sees token-bearing messages by design.
@@ -93,11 +112,20 @@ class _Direction(nn.Module):
         nn.init.zeros_(self.output.weight)
         nn.init.zeros_(self.output.bias)
 
-        self.conservative_gate = bool(conservative_gate)
+        self.conservative_gate = bool(conservative_gate or residual == "scalar_gate")
+        self.position_gate = residual == "confidence_gate"
         if self.conservative_gate:
             self.gate_logit = nn.Parameter(torch.tensor(math.log(gate_init / (1.0 - gate_init))))
+        if self.position_gate:
+            self.confidence_gate = nn.Linear(hidden_dim, 1)
+            nn.init.zeros_(self.confidence_gate.weight)
+            nn.init.constant_(self.confidence_gate.bias, math.log(gate_init / (1.0 - gate_init)))
 
-    def _gate(self, reference: Tensor) -> Tensor:
+    def _gate(self, reference: Tensor, target_h: Tensor | None = None) -> Tensor:
+        if self.position_gate:
+            if target_h is None:
+                raise ValueError("confidence gate requires target hidden states")
+            return torch.sigmoid(self.confidence_gate(target_h).squeeze(-1)).to(dtype=reference.dtype)
         if not self.conservative_gate:
             return reference.new_ones(())
         return torch.sigmoid(self.gate_logit).to(dtype=reference.dtype)
@@ -158,6 +186,7 @@ class _Direction(nn.Module):
         edge_index: Tensor,
         edge_features: Tensor,
         token_off: bool = False,
+        partner_known: Tensor | None = None,
     ) -> dict[str, Tensor]:
         length = target_h.shape[0]
         if edge_index.numel() == 0:
@@ -166,7 +195,7 @@ class _Direction(nn.Module):
                 "edge_weights": target_h.new_zeros((0,)),
                 "null_weight": target_h.new_ones((length,)),
                 "content_norm": target_h.new_zeros((0,)),
-                "gate": self._gate(target_h),
+                "gate": self._gate(target_h, target_h),
             }
         target_index, partner_index = edge_index[0], edge_index[1]
         token = (
@@ -174,17 +203,27 @@ class _Direction(nn.Module):
             if token_off
             else self.token_embedding(partner_tokens[partner_index]).to(dtype=target_h.dtype)
         )
+        if partner_known is not None and not token_off:
+            if partner_known.ndim != 1 or partner_known.shape[0] != partner_h.shape[0]:
+                raise ValueError("partner_known must align with partner hidden states")
+            token = token * partner_known[partner_index].to(dtype=token.dtype).unsqueeze(-1)
         if self.sequence_independent_attention:
             content = self.content(
                 torch.cat([self.target_norm(target_h)[target_index], self.partner_norm(partner_h)[partner_index], edge_features], dim=-1)
             )
             scores = self.attention(content).squeeze(-1) if self.attention is not None else None
-            native_value = self.value(torch.cat([content, token], dim=-1))
-            if self.partner_centered_residual:
-                off_value = self.value(torch.cat([content, torch.zeros_like(token)], dim=-1))
-                values = native_value - off_value
+            centered = self.partner_centered_residual or self.interaction == "centered" or self.residual == "partner_centered"
+            if self.interaction == "film":
+                gamma, beta = self.film(token).chunk(2, dim=-1)
+                native_value = self.value(content * (1.0 + gamma) + beta)
+                off_value = self.value(content)
+            elif self.interaction == "multiplicative":
+                native_value = self.value(content * self.token_projection(token))
+                off_value = self.value(torch.zeros_like(content))
             else:
-                values = native_value
+                native_value = self.value(torch.cat([content, token], dim=-1))
+                off_value = self.value(torch.cat([content, torch.zeros_like(token)], dim=-1))
+            values = native_value - off_value if centered else native_value
             content_norm = content.norm(dim=-1)
         else:
             message = self.message(torch.cat([target_h[target_index], partner_h[partner_index], edge_features, token], dim=-1))
@@ -193,8 +232,8 @@ class _Direction(nn.Module):
             content_norm = message.norm(dim=-1)
         aggregate, edge_weights, null_weight = self._aggregate(values, scores, target_index, length)
         raw_delta = self.output(self.norm(aggregate))
-        gate = self._gate(raw_delta)
-        delta = raw_delta * gate
+        gate = self._gate(raw_delta, target_h)
+        delta = raw_delta * gate.unsqueeze(-1)
         return {"delta": delta, "edge_weights": edge_weights, "null_weight": null_weight, "content_norm": content_norm, "gate": gate}
 
 
@@ -204,7 +243,7 @@ class ReciprocalAdapter(nn.Module):
     def __init__(self, config: AdapterConfig | None = None):
         super().__init__()
         self.config = config or AdapterConfig()
-        dims = {"G0": self.config.rbf_bins + 1, "G1": 6 * self.config.rbf_bins + 6, "G2": 6 * self.config.rbf_bins + 6 + 3 + 3 + 6}
+        dims = {mode: geometry_dimension(mode, self.config.rbf_bins) for mode in ("G0", "G1", "G2", "G3")}
         if self.config.geometry not in dims:
             raise ValueError(f"unknown geometry {self.config.geometry}")
         self.raw_geometry_dim = dims[self.config.geometry]
@@ -226,20 +265,30 @@ class ReciprocalAdapter(nn.Module):
         else:
             direction_hidden_dim = self.config.hidden_dim
         v2 = bool(self.config.sequence_independent_attention)
+        residual = self.config.residual
+        if self.config.partner_centered_residual and residual == "direct":
+            residual = "partner_centered"
         direction_args = dict(
             sequence_independent_attention=v2,
             partner_centered_residual=bool(self.config.partner_centered_residual),
             conservative_gate=bool(self.config.conservative_gate),
             gate_init=float(self.config.gate_init),
             correct_null_softmax=v2,
+            interaction=self.config.interaction,
+            residual=residual,
         )
         self.r2p = _Direction(direction_hidden_dim, self.config.token_dim, self.config.edge_dim, self.config.message_dim, 4, 20, self.config.aggregation, self.config.layers, self.config.dropout, **direction_args)
         self.p2r = _Direction(direction_hidden_dim, self.config.token_dim, self.config.edge_dim, self.config.message_dim, 20, 4, self.config.aggregation, self.config.layers, self.config.dropout, **direction_args)
 
     def _select_geometry(self, full_geometry: Tensor) -> Tensor:
         bins = self.config.rbf_bins
-        if self.config.geometry == "G2":
+        expected = geometry_dimension(self.config.geometry, bins)
+        if full_geometry.shape[-1] == expected:
             return full_geometry
+        if self.config.geometry in {"G2", "G3"}:
+            if self.config.geometry == "G2":
+                return full_geometry[:, : geometry_dimension("G2", bins)]
+            raise ValueError("G3 requires a cache built with G3 geometry")
         if self.config.geometry == "G1":
             return full_geometry[:, : 6 * bins + 6]
         return torch.cat([full_geometry[:, :bins], full_geometry[:, 6 * bins : 6 * bins + 1]], dim=-1)
@@ -249,7 +298,19 @@ class ReciprocalAdapter(nn.Module):
             return p_h, r_h
         return self.protein_projector(self.protein_norm(p_h)), self.rna_projector(self.rna_norm(r_h))
 
-    def _residual(self, direction: str, p_h: Tensor, r_h: Tensor, p_tokens: Tensor, r_tokens: Tensor, edge_index: Tensor, full_geometry: Tensor, token_off: bool) -> dict[str, Tensor]:
+    def _residual(
+        self,
+        direction: str,
+        p_h: Tensor,
+        r_h: Tensor,
+        p_tokens: Tensor,
+        r_tokens: Tensor,
+        edge_index: Tensor,
+        full_geometry: Tensor,
+        token_off: bool,
+        p_known: Tensor | None,
+        r_known: Tensor | None,
+    ) -> dict[str, Tensor]:
         geometry = self._select_geometry(full_geometry)
         if self.config.separate_edge_encoders:
             encoder = self.edge_encoder_r2p if direction == "protein" else self.edge_encoder_p2r
@@ -258,11 +319,11 @@ class ReciprocalAdapter(nn.Module):
             encoder = self.shared_edge_encoder
         edge = encoder(geometry)
         if direction == "protein":
-            return self.r2p(p_h, r_h, r_tokens, edge_index, edge, token_off)
+            return self.r2p(p_h, r_h, r_tokens, edge_index, edge, token_off, r_known)
         if direction == "rna":
             # Cached cross edges are indexed (protein, RNA); the RNA branch
             # receives (RNA target, protein partner).
-            return self.p2r(r_h, p_h, p_tokens, edge_index[[1, 0]], edge, token_off)
+            return self.p2r(r_h, p_h, p_tokens, edge_index[[1, 0]], edge, token_off, p_known)
         raise ValueError(direction)
 
     def forward(
@@ -278,6 +339,8 @@ class ReciprocalAdapter(nn.Module):
         edge_index_p2r: Tensor | None = None,
         edge_geometry_p2r: Tensor | None = None,
         token_off: bool = False,
+        protein_known: Tensor | None = None,
+        rna_known: Tensor | None = None,
     ) -> dict[str, Tensor]:
         # Keep the old single-edge call valid for existing correctness tests
         # and old diagnostic scripts.
@@ -286,8 +349,8 @@ class ReciprocalAdapter(nn.Module):
         if edge_geometry_p2r is None:
             edge_geometry_p2r = edge_geometry_r2p
         p_h_input, r_h_input = self._hidden_inputs(p_h, r_h)
-        p_details = self._residual("protein", p_h_input, r_h_input, p_tokens, r_tokens, edge_index_r2p, edge_geometry_r2p, token_off)
-        r_details = self._residual("rna", p_h_input, r_h_input, p_tokens, r_tokens, edge_index_p2r, edge_geometry_p2r, token_off)
+        p_details = self._residual("protein", p_h_input, r_h_input, p_tokens, r_tokens, edge_index_r2p, edge_geometry_r2p, token_off, protein_known, rna_known)
+        r_details = self._residual("rna", p_h_input, r_h_input, p_tokens, r_tokens, edge_index_p2r, edge_geometry_p2r, token_off, protein_known, rna_known)
         p_delta, r_delta = p_details["delta"], r_details["delta"]
         return {
             "protein_logits": p_base + p_delta,
