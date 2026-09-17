@@ -1,0 +1,222 @@
+{
+  "split": "complex_train",
+  "complexes": 900,
+  "true_contact_pairs_lt5": 87829,
+  "anchor_radius_quantiles_ca_c1": {
+    "0.95": 13.308568572998043,
+    "0.98": 14.357456359863283,
+    "0.99": 14.979730606079102
+  },
+  "true_contacts_with_complete_ca_c1": 87829,
+  "neighbor_count_quantiles_by_integer_radius": {
+    "4.0": {
+      "protein": {
+        "0.95": 0.0,
+        "0.99": 0.0
+      },
+      "rna": {
+        "0.95": 0.0,
+        "0.99": 0.0
+      }
+    },
+    "5.0": {
+      "protein": {
+        "0.95": 0.0,
+        "0.99": 0.0
+      },
+      "rna": {
+        "0.95": 0.0,
+        "0.99": 1.0
+      }
+    },
+    "6.0": {
+      "protein": {
+        "0.95": 0.0,
+        "0.99": 1.0
+      },
+      "rna": {
+        "0.95": 1.0,
+        "0.99": 3.0
+      }
+    },
+    "7.0": {
+      "protein": {
+        "0.95": 0.0,
+        "0.99": 1.0
+      },
+      "rna": {
+        "0.95": 2.0,
+        "0.99": 4.0
+      }
+    },
+    "8.0": {
+      "protein": {
+        "0.95": 1.0,
+        "0.99": 2.0
+      },
+      "rna": {
+        "0.95": 4.0,
+        "0.99": 7.0
+      }
+    },
+    "9.0": {
+      "protein": {
+        "0.95": 1.0,
+        "0.99": 3.0
+      },
+      "rna": {
+        "0.95": 6.0,
+        "0.99": 10.0
+      }
+    },
+    "10.0": {
+      "protein": {
+        "0.95": 2.0,
+        "0.99": 4.0
+      },
+      "rna": {
+        "0.95": 10.0,
+        "0.99": 15.0
+      }
+    },
+    "11.0": {
+      "protein": {
+        "0.95": 3.0,
+        "0.99": 5.0
+      },
+      "rna": {
+        "0.95": 13.0,
+        "0.99": 20.0
+      }
+    },
+    "12.0": {
+      "protein": {
+        "0.95": 4.0,
+        "0.99": 6.0
+      },
+      "rna": {
+        "0.95": 18.0,
+        "0.99": 26.0
+      }
+    },
+    "13.0": {
+      "protein": {
+        "0.95": 4.0,
+        "0.99": 7.0
+      },
+      "rna": {
+        "0.95": 24.0,
+        "0.99": 33.0
+      }
+    },
+    "14.0": {
+      "protein": {
+        "0.95": 6.0,
+        "0.99": 8.0
+      },
+      "rna": {
+        "0.95": 30.0,
+        "0.99": 41.0
+      }
+    },
+    "15.0": {
+      "protein": {
+        "0.95": 7.0,
+        "0.99": 10.0
+      },
+      "rna": {
+        "0.95": 37.0,
+        "0.99": 51.0
+      }
+    },
+    "16.0": {
+      "protein": {
+        "0.95": 8.0,
+        "0.99": 12.0
+      },
+      "rna": {
+        "0.95": 45.0,
+        "0.99": 63.0
+      }
+    },
+    "17.0": {
+      "protein": {
+        "0.95": 9.0,
+        "0.99": 13.0
+      },
+      "rna": {
+        "0.95": 55.0,
+        "0.99": 75.0
+      }
+    },
+    "18.0": {
+      "protein": {
+        "0.95": 10.0,
+        "0.99": 16.0
+      },
+      "rna": {
+        "0.95": 65.79999999999563,
+        "0.99": 89.0
+      }
+    },
+    "19.0": {
+      "protein": {
+        "0.95": 12.0,
+        "0.99": 18.0
+      },
+      "rna": {
+        "0.95": 77.0,
+        "0.99": 105.0
+      }
+    },
+    "20.0": {
+      "protein": {
+        "0.95": 13.0,
+        "0.99": 20.0
+      },
+      "rna": {
+        "0.95": 90.0,
+        "0.99": 123.0
+      }
+    }
+  },
+  "contact_partner_count_quantiles": {
+    "protein": {
+      "all_targets": {
+        "0.50": 0.0,
+        "0.95": 2.0,
+        "0.99": 3.0,
+        "max": 11.0
+      },
+      "active_targets_only": {
+        "0.50": 2.0,
+        "0.95": 4.0,
+        "0.99": 5.0,
+        "max": 11.0
+      },
+      "K95contact": 4,
+      "K99contact": 5
+    },
+    "rna": {
+      "all_targets": {
+        "0.50": 0.0,
+        "0.95": 8.0,
+        "0.99": 12.0,
+        "max": 23.0
+      },
+      "active_targets_only": {
+        "0.50": 4.0,
+        "0.95": 11.0,
+        "0.99": 14.0,
+        "max": 23.0
+      },
+      "K95contact": 11,
+      "K99contact": 14
+    }
+  },
+  "contact_distance_min": 0.9502164721488953,
+  "contact_distance_median": 3.6220927238464355,
+  "contact_distance_max": 4.999938011169434,
+  "definition": "true contact means full heavy-atom residue-pair minimum distance <5 A; radius quantiles are C-alpha/C1-prime distances for those contacts",
+  "note": "The legacy radius table counts valid C-alpha/C1-prime anchor neighbors. K^contact is defined separately by contact_partner_count_quantiles: per-target partners whose full heavy-atom residue-pair minimum distance is <5 A. Test is not read."
+}

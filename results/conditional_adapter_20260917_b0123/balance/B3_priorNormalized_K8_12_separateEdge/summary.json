@@ -1,0 +1,29 @@
+{
+  "out": "F:\\111\u4e34\u65f6\\PR PILOT\\pilot_conditional_adapter_20260917_b0123\\balance\\B3_priorNormalized_K8_12_separateEdge",
+  "best": "F:\\111\u4e34\u65f6\\PR PILOT\\pilot_conditional_adapter_20260917_b0123\\balance\\B3_priorNormalized_K8_12_separateEdge\\best.pt",
+  "epochs_run": 25,
+  "best_worst_direction_ratio": 0.9222787605726716,
+  "best_epoch": 7,
+  "config": {
+    "geometry": "G2",
+    "aggregation": "A2",
+    "hidden_dim": 128,
+    "edge_dim": 64,
+    "token_dim": 32,
+    "message_dim": 128,
+    "layers": 1,
+    "dropout": 0.1,
+    "rbf_bins": 16,
+    "separate_edge_encoders": true
+  },
+  "radius": 14.3574563598633,
+  "neighbors": 51,
+  "r2p_neighbors": 8,
+  "p2r_neighbors": 12,
+  "direction_specific": true,
+  "loss_mode": "prior_normalized",
+  "lr": 0.0003,
+  "noise": 0.0,
+  "seed": 0,
+  "batch_size": 16
+}
