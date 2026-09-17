@@ -116,8 +116,17 @@ def _train_fold(
 ) -> dict:
     seed = int(args.seed)
     _seed_everything(seed)
-    train_data = [by_id[sample_id] for sample_id in fold["train_sample_ids"]]
-    val_data = [by_id[sample_id] for sample_id in fold["val_sample_ids"]]
+    # Select the model's feature columns before materializing directional
+    # edges. Keep the shared source payload immutable across fold jobs.
+    selector = ReciprocalAdapter(_config(spec))
+    def fold_payload(sample_id):
+        payload = dict(by_id[sample_id])
+        payload["edge_geometry"] = selector._select_geometry(payload["edge_geometry"])
+        return payload
+    train_data = [fold_payload(sample_id) for sample_id in fold["train_sample_ids"]]
+    val_data = [fold_payload(sample_id) for sample_id in fold["val_sample_ids"]]
+    del selector
+    _seed_everything(seed)
     r2p_k = int(spec.get("r2p_k", args.r2p_k))
     p2r_k = int(spec.get("p2r_k", args.p2r_k))
     radius = float(spec.get("radius", args.radius))
@@ -225,6 +234,7 @@ def _advance_order_rng(order_rng: random.Random, sample_count: int, completed_ep
 def _init_fold_worker(cache_root: Path) -> None:
     """Load the memory-mapped development cache once per persistent worker."""
     global _FOLD_WORKER_BY_ID
+    torch.set_num_threads(2)
     data = _load_cache(Path(cache_root), "train") + _load_cache(Path(cache_root), "val")
     _FOLD_WORKER_BY_ID = {str(payload["sample_id"]): payload for payload in data}
 
