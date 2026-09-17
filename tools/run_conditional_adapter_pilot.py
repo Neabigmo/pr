@@ -666,7 +666,15 @@ def _attach_selected_edges(
     return data
 
 
-def _forward_payload(model: ReciprocalAdapter, payload: dict, device: torch.device, radius: float, neighbors: int, token_off: bool = False) -> dict[str, torch.Tensor]:
+def _forward_payload(
+    model: ReciprocalAdapter,
+    payload: dict,
+    device: torch.device,
+    radius: float,
+    neighbors: int,
+    token_off: bool = False,
+    partner_token_override: dict[str, torch.Tensor] | None = None,
+) -> dict[str, torch.Tensor]:
     edge_index_r2p = payload.get("_selected_edge_index_r2p")
     geometry_r2p = payload.get("_selected_geometry_r2p")
     edge_index_p2r = payload.get("_selected_edge_index_p2r")
@@ -677,9 +685,14 @@ def _forward_payload(model: ReciprocalAdapter, payload: dict, device: torch.devi
         geometry_r2p = _selected_geometry(payload, shared)
         edge_index_p2r = shared
         geometry_p2r = geometry_r2p
+    p_tokens = payload["protein_native"]
+    r_tokens = payload["rna_native"]
+    if partner_token_override is not None:
+        p_tokens = partner_token_override.get("protein", p_tokens)
+        r_tokens = partner_token_override.get("rna", r_tokens)
     return model(
         payload["protein_base"].to(device), payload["rna_base"].to(device), payload["protein_hidden"].to(device), payload["rna_hidden"].to(device),
-        payload["protein_native"].to(device), payload["rna_native"].to(device),
+        p_tokens.to(device), r_tokens.to(device),
         edge_index_r2p.to(device), geometry_r2p.to(device), edge_index_p2r.to(device), geometry_p2r.to(device), token_off=token_off,
     )
 
