@@ -56,18 +56,18 @@ def rcsb_query(kind: Literal["protein", "rna", "complex"]) -> dict:
     """
     nodes = [
         _term("rcsb_entry_info.structure_determination_methodology", "exact_match", "experimental"),
-        _term("rcsb_entry_info.polymer_entity_count_DNA", "exact_match", 0),
-        _term("rcsb_entry_info.polymer_entity_count_nucleic_acid_hybrid", "exact_match", 0),
+        _term("rcsb_entry_info.polymer_entity_count_DNA", "equals", 0),
+        _term("rcsb_entry_info.polymer_entity_count_nucleic_acid_hybrid", "equals", 0),
     ]
     if kind == "protein":
         nodes += [
             _term("rcsb_entry_info.polymer_entity_count_protein", "greater", 0),
-            _term("rcsb_entry_info.polymer_entity_count_RNA", "exact_match", 0),
+            _term("rcsb_entry_info.polymer_entity_count_RNA", "equals", 0),
         ]
     elif kind == "rna":
         nodes += [
             _term("rcsb_entry_info.polymer_entity_count_RNA", "greater", 0),
-            _term("rcsb_entry_info.polymer_entity_count_protein", "exact_match", 0),
+            _term("rcsb_entry_info.polymer_entity_count_protein", "equals", 0),
         ]
     elif kind == "complex":
         nodes += [

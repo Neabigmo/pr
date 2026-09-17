@@ -1,3 +1,6 @@
+<!-- REVIEW4-ROUTING-2026-09-05 -->
+> **Review-4 routing notice (2026-09-05).** See [docs/INDEX_REVIEW4.md](docs/INDEX_REVIEW4.md) and the Review-4 runbook for updated contracts, known incompatibilities and outstanding integration gates. The original text below is preserved as historical context; it is not a claim that the new protocol or real experiments have passed.
+
 # PR Mini-Pilot Runbook
 
 This is the canonical execution order. Old one-off commands are not authoritative.
@@ -71,6 +74,11 @@ python -m pr_pilot.cli download-rfam --out data/rfam
 Keep download failures and checksums. Do not silently substitute a different structure for one method only.
 
 ## 4. Coordinate-level screening
+
+The formal pilot uses the strict resolution/method rule described below. The
+temporary 2026-09-05 execution exception is documented separately in
+`docs/ROUND_20260905_SCREENING_EXCEPTION.md` and must not be treated as the
+`pilot_v1` protocol.
 
 ```bash
 python -m pr_pilot.cli screen --kind protein --config configs/pilot.yaml --download-manifest data/raw/protein/download_manifest.tsv --out data/screened/protein
