@@ -58,6 +58,7 @@ DEFAULT_CACHE = Path(r"F:\111临时\PR PILOT\pilot_conditional_adapter_20260916\
 DEFAULT_MANIFESTS = Path(r"F:\111临时\PR PILOT\remote_return_20260911\manifests\round_20260905_exception_v2")
 DEFAULT_OUT = Path(r"I:\PR_PILOT_SCIENTIFIC\20260917\reports")
 RADIUS_OPTIONS = (13.308568573, 14.357456360, 14.979730606)
+_FOLD_WORKER_BY_ID: dict[str, dict] | None = None
 
 
 def _seed_everything(seed: int) -> None:
@@ -221,12 +222,19 @@ def _advance_order_rng(order_rng: random.Random, sample_count: int, completed_ep
         order_rng.shuffle(scratch)
 
 
-def _train_fold_worker(job: tuple[dict, dict, Path, argparse.Namespace, Path]) -> dict:
-    """Load a memory-mapped cache inside a worker and train one independent fold."""
-    spec, fold, cache_root, args, target = job
+def _init_fold_worker(cache_root: Path) -> None:
+    """Load the memory-mapped development cache once per persistent worker."""
+    global _FOLD_WORKER_BY_ID
     data = _load_cache(Path(cache_root), "train") + _load_cache(Path(cache_root), "val")
-    by_id = {str(payload["sample_id"]): payload for payload in data}
-    return _train_fold(spec, fold, by_id, args, target)
+    _FOLD_WORKER_BY_ID = {str(payload["sample_id"]): payload for payload in data}
+
+
+def _train_fold_worker(job: tuple[dict, dict, argparse.Namespace, Path]) -> dict:
+    """Train one independent fold using the worker's persistent cache."""
+    if _FOLD_WORKER_BY_ID is None:
+        raise RuntimeError("fold worker cache was not initialized")
+    spec, fold, args, target = job
+    return _train_fold(spec, fold, _FOLD_WORKER_BY_ID, args, target)
 
 
 def _stage_specs(stage: str, base: dict) -> list[dict]:
@@ -297,6 +305,14 @@ def run_search(args: argparse.Namespace) -> dict:
     stage_order = [args.stage] if args.stage != "all" else ["geometry", "k", "radius", "aggregation", "interaction", "residual", "edge_encoder"]
     selected = base
     reports = {}
+    executor = (
+        ProcessPoolExecutor(
+            max_workers=int(args.fold_workers),
+            initializer=_init_fold_worker,
+            initargs=(Path(args.cache_root),),
+        )
+        if int(args.fold_workers) > 1 else None
+    )
     for stage in stage_order:
         specs = _stage_specs(stage, selected)
         candidates = []
@@ -309,16 +325,15 @@ def run_search(args: argparse.Namespace) -> dict:
                 if (target / "summary.json").exists() and not args.force:
                     fold_summaries.append(json.loads((target / "summary.json").read_text(encoding="utf-8")))
                 else:
-                    pending.append((spec, fold, Path(args.cache_root), args, target))
+                    pending.append((spec, fold, args, target))
             if int(args.fold_workers) <= 1 or len(pending) <= 1:
                 for job in pending:
-                    summary = _train_fold(job[0], job[1], by_id, args, job[4])
+                    summary = _train_fold(job[0], job[1], by_id, args, job[3])
                     fold_summaries.append(summary)
             else:
-                with ProcessPoolExecutor(max_workers=int(args.fold_workers)) as executor:
-                    futures = [executor.submit(_train_fold_worker, job) for job in pending]
-                    for future in as_completed(futures):
-                        fold_summaries.append(future.result())
+                futures = [executor.submit(_train_fold_worker, job) for job in pending]
+                for future in as_completed(futures):
+                    fold_summaries.append(future.result())
             for summary in sorted(fold_summaries, key=lambda item: int(item["fold"])):
                 print(json.dumps({"stage": stage, "candidate": name, "fold": summary["fold"], "score": summary["selection_score"]}, ensure_ascii=False), flush=True)
             metrics = {
@@ -332,6 +347,8 @@ def run_search(args: argparse.Namespace) -> dict:
         reports[stage] = {"selected": stage_choice, "candidates": candidates}
         (out / "search" / stage / "summary.json").parent.mkdir(parents=True, exist_ok=True)
         (out / "search" / stage / "summary.json").write_text(json.dumps(reports[stage], indent=2, ensure_ascii=False, default=float), encoding="utf-8")
+    if executor is not None:
+        executor.shutdown(wait=True)
     result = {"selected": selected, "stages": reports, "seed": int(args.seed), "test_read": False}
     (out / "search_summary.json").write_text(json.dumps(result, indent=2, ensure_ascii=False, default=float), encoding="utf-8")
     print(json.dumps({"selected": selected, "test_read": False}, indent=2, ensure_ascii=False), flush=True)
