@@ -1,0 +1,532 @@
+{
+  "folds": 3,
+  "gate_pass_folds": 2,
+  "mean_metrics": {
+    "partner_gate_pass": 0.6666666666666666,
+    "protein_active_nll": 2.2561667452431124,
+    "protein_active_prior_nll": 2.3099443485859847,
+    "protein_active_recovery": 0.3015099187307136,
+    "protein_all_nll": 2.193789966847767,
+    "protein_all_prior_nll": 2.2212366210156245,
+    "protein_all_recovery": 0.32229314805222026,
+    "protein_delta_prior_rms_ratio": 0.10360447483086595,
+    "protein_delta_rms": 0.40959790218629416,
+    "protein_gate": 1.0,
+    "protein_interface_nll": 2.4333558329665834,
+    "protein_interface_prior_nll": 2.5537724586642057,
+    "protein_interface_ratio": 0.9528143548702216,
+    "protein_interface_recovery": 0.24386480675891986,
+    "protein_native_minus_permutation_interface_nll": 0.002298556667510591,
+    "protein_native_minus_token_off_interface_nll": -0.11551771189099469,
+    "protein_null_weight_mean": 0.6862294136105328,
+    "protein_null_weight_median": 0.793374363336515,
+    "protein_partner_permutation_interface_nll": 2.431057276299073,
+    "protein_prior_logits_rms": 3.9968623010678903,
+    "protein_token_off_interface_nll": 2.548873544857578,
+    "relative_interface_nll": 0.9637871009061983,
+    "rna_active_nll": 1.0872533626659573,
+    "rna_active_prior_nll": 1.1150283890219335,
+    "rna_active_recovery": 0.5335622525829772,
+    "rna_all_nll": 1.1055579571708634,
+    "rna_all_prior_nll": 1.1335025705479256,
+    "rna_all_recovery": 0.5236016804853018,
+    "rna_delta_prior_rms_ratio": 0.16270185668832066,
+    "rna_delta_rms": 0.32451465224222836,
+    "rna_gate": 1.0,
+    "rna_interface_nll": 1.091143032660565,
+    "rna_interface_prior_nll": 1.121116693376429,
+    "rna_interface_ratio": 0.9747598469421752,
+    "rna_interface_recovery": 0.5317142459328675,
+    "rna_native_minus_permutation_interface_nll": -0.0010110425216815304,
+    "rna_native_minus_token_off_interface_nll": -0.028120715137135616,
+    "rna_null_weight_mean": 0.43781684984907043,
+    "rna_null_weight_median": 0.4220716050459347,
+    "rna_partner_permutation_interface_nll": 1.0921540751822463,
+    "rna_prior_logits_rms": 2.1742580680823647,
+    "rna_token_off_interface_nll": 1.1192637477977005,
+    "worst_direction_ratio": 0.9747598469421752
+  },
+  "mean_gate_conditions": {
+    "protein_ratio_lt_1": true,
+    "rna_ratio_lt_1": true,
+    "protein_native_better_than_off": true,
+    "rna_native_better_than_off": true
+  },
+  "promotion_gate_pass": true,
+  "fold_summaries": [
+    {
+      "experiment": "C3",
+      "fold": 0,
+      "train_complexes": 667,
+      "val_complexes": 333,
+      "epochs_run": 20,
+      "best_epoch": 2,
+      "best_selection_score": 12.006086737020356,
+      "best_partner_gate_pass": false,
+      "best_validation": {
+        "protein_all_nll": 2.23475067894738,
+        "protein_all_prior_nll": 2.255962107632611,
+        "protein_all_recovery": 0.31206928954289126,
+        "protein_active_nll": 2.2947977605882706,
+        "protein_active_prior_nll": 2.3356831793312556,
+        "protein_active_recovery": 0.2923759295193999,
+        "protein_interface_nll": 2.4459331547533787,
+        "protein_interface_prior_nll": 2.5592783657280176,
+        "protein_interface_recovery": 0.24688350933942352,
+        "protein_token_off_interface_nll": 2.5552240499147065,
+        "protein_partner_permutation_interface_nll": 2.4433391681304566,
+        "protein_null_weight_mean": 0.6909813618695771,
+        "protein_null_weight_median": 0.8071378613108987,
+        "protein_gate": 1.0,
+        "protein_delta_rms": 0.4202733309687795,
+        "protein_prior_logits_rms": 3.952127501055285,
+        "protein_delta_prior_rms_ratio": 0.10758611493864217,
+        "rna_all_nll": 0.9803873599470556,
+        "rna_all_prior_nll": 0.9822439968406975,
+        "rna_all_recovery": 0.5945794931515022,
+        "rna_active_nll": 0.9787291659114955,
+        "rna_active_prior_nll": 0.9785162139762271,
+        "rna_active_recovery": 0.5962351653892715,
+        "rna_interface_nll": 0.9962506262255503,
+        "rna_interface_prior_nll": 0.9937294826314256,
+        "rna_interface_recovery": 0.5860036518480685,
+        "rna_token_off_interface_nll": 0.9927009434044898,
+        "rna_partner_permutation_interface_nll": 0.9941949600258747,
+        "rna_null_weight_mean": 0.5235456135627385,
+        "rna_null_weight_median": 0.4997628518008255,
+        "rna_gate": 1.0,
+        "rna_delta_rms": 0.3351579191269459,
+        "rna_prior_logits_rms": 2.3704969614475697,
+        "rna_delta_prior_rms_ratio": 0.15624234650854593,
+        "protein_interface_ratio": 0.9557120427021636,
+        "protein_native_minus_token_off_interface_nll": -0.10929089516132784,
+        "protein_native_minus_permutation_interface_nll": 0.0025939866229220954,
+        "protein_delta_rms_by_distance_to_interface": {
+          "0": {
+            "n": 22373,
+            "mean_delta_rms": 0.4223655220719326
+          },
+          "1-2": {
+            "n": 22875,
+            "mean_delta_rms": 0.3451637045425551
+          },
+          "3-5": {
+            "n": 18518,
+            "mean_delta_rms": 0.14369343007221788
+          },
+          "6+": {
+            "n": 87784,
+            "mean_delta_rms": 0.029413272754221224
+          }
+        },
+        "protein_delta_rms_by_prior_confidence_nll_bin": {
+          "q1": {
+            "n": 37888,
+            "mean_delta_rms": 0.13472162999049622
+          },
+          "q2": {
+            "n": 37887,
+            "mean_delta_rms": 0.13940966650395745
+          },
+          "q3": {
+            "n": 37887,
+            "mean_delta_rms": 0.15728610638408316
+          },
+          "q4": {
+            "n": 37888,
+            "mean_delta_rms": 0.16477215413247118
+          }
+        },
+        "rna_interface_ratio": 1.0025370522241612,
+        "rna_native_minus_token_off_interface_nll": 0.003549682821060496,
+        "rna_native_minus_permutation_interface_nll": 0.0020556661996755654,
+        "rna_delta_rms_by_distance_to_interface": {
+          "0": {
+            "n": 9063,
+            "mean_delta_rms": 0.3327462055209564
+          },
+          "1-2": {
+            "n": 4911,
+            "mean_delta_rms": 0.16296731089125174
+          },
+          "3-5": {
+            "n": 4395,
+            "mean_delta_rms": 0.027910884336883095
+          },
+          "6+": {
+            "n": 16274,
+            "mean_delta_rms": 0.013648988695361276
+          }
+        },
+        "rna_delta_rms_by_prior_confidence_nll_bin": {
+          "q1": {
+            "n": 8661,
+            "mean_delta_rms": 0.08264382057020525
+          },
+          "q2": {
+            "n": 8660,
+            "mean_delta_rms": 0.11193222095394038
+          },
+          "q3": {
+            "n": 8661,
+            "mean_delta_rms": 0.14122880755501846
+          },
+          "q4": {
+            "n": 8661,
+            "mean_delta_rms": 0.14461487558695182
+          }
+        },
+        "relative_interface_nll": 0.9791245474631625,
+        "worst_direction_ratio": 1.0025370522241612,
+        "partner_gate_pass": false,
+        "native_better_than_token_off": {
+          "protein": true,
+          "rna": false
+        }
+      },
+      "config": {
+        "geometry": "G2",
+        "aggregation": "A2",
+        "hidden_dim": 128,
+        "hidden_projection_dim": 64,
+        "edge_dim": 64,
+        "token_dim": 64,
+        "message_dim": 128,
+        "layers": 1,
+        "dropout": 0.1,
+        "rbf_bins": 16,
+        "separate_edge_encoders": false,
+        "sequence_independent_attention": true,
+        "partner_centered_residual": true,
+        "modality_projector": true,
+        "conservative_gate": false,
+        "gate_init": 0.1
+      },
+      "radius": 14.357456359863283,
+      "neighbors": 12,
+      "r2p_neighbors": 8,
+      "p2r_neighbors": 12,
+      "seed": 20260917,
+      "batch_size": 16,
+      "checkpoint": "F:\\111临时\\PR PILOT\\pilot_adapter_v2_20260917\\C3\\fold0\\best.pt",
+      "diagnostics": "F:\\111临时\\PR PILOT\\pilot_adapter_v2_20260917\\C3\\fold0\\diagnostics.json",
+      "test_read": false
+    },
+    {
+      "experiment": "C3",
+      "fold": 1,
+      "train_complexes": 666,
+      "val_complexes": 334,
+      "epochs_run": 22,
+      "best_epoch": 4,
+      "best_selection_score": 0.9596863376460996,
+      "best_partner_gate_pass": true,
+      "best_validation": {
+        "protein_all_nll": 2.081811231053518,
+        "protein_all_prior_nll": 2.117419224299357,
+        "protein_all_recovery": 0.35708462107859684,
+        "protein_active_nll": 2.1668121729068415,
+        "protein_active_prior_nll": 2.235652153363485,
+        "protein_active_recovery": 0.3309417498147416,
+        "protein_interface_nll": 2.3805122300536334,
+        "protein_interface_prior_nll": 2.5095296677001224,
+        "protein_interface_recovery": 0.2618235309502322,
+        "protein_token_off_interface_nll": 2.5056864176681657,
+        "protein_partner_permutation_interface_nll": 2.378659498191879,
+        "protein_null_weight_mean": 0.6765011191635788,
+        "protein_null_weight_median": 0.7472285853843846,
+        "protein_gate": 1.0,
+        "protein_delta_rms": 0.4363437653658633,
+        "protein_prior_logits_rms": 4.065545968666762,
+        "protein_delta_prior_rms_ratio": 0.10886767722978563,
+        "rna_all_nll": 1.0888682409317907,
+        "rna_all_prior_nll": 1.1278678968459546,
+        "rna_all_recovery": 0.5380202882928763,
+        "rna_active_nll": 1.0376165487809095,
+        "rna_active_prior_nll": 1.0754886195509734,
+        "rna_active_recovery": 0.5645391981223387,
+        "rna_interface_nll": 1.0243936854297528,
+        "rna_interface_prior_nll": 1.0674255158819124,
+        "rna_interface_recovery": 0.573893090275055,
+        "rna_token_off_interface_nll": 1.0655089846985069,
+        "rna_partner_permutation_interface_nll": 1.0206239573255984,
+        "rna_null_weight_mean": 0.4586429186723011,
+        "rna_null_weight_median": 0.47326029691019816,
+        "rna_gate": 1.0,
+        "rna_delta_rms": 0.3145331640889545,
+        "rna_prior_logits_rms": 2.194338875259468,
+        "rna_delta_prior_rms_ratio": 0.15582598342063897,
+        "protein_interface_ratio": 0.9485889968518572,
+        "protein_native_minus_token_off_interface_nll": -0.12517418761453225,
+        "protein_native_minus_permutation_interface_nll": 0.0018527318617542754,
+        "protein_delta_rms_by_distance_to_interface": {
+          "0": {
+            "n": 18388,
+            "mean_delta_rms": 0.4289130457637036
+          },
+          "1-2": {
+            "n": 17349,
+            "mean_delta_rms": 0.32303103519045
+          },
+          "3-5": {
+            "n": 13559,
+            "mean_delta_rms": 0.1376167048106495
+          },
+          "6+": {
+            "n": 68584,
+            "mean_delta_rms": 0.027701157297507568
+          }
+        },
+        "protein_delta_rms_by_prior_confidence_nll_bin": {
+          "q1": {
+            "n": 29470,
+            "mean_delta_rms": 0.12536074965964708
+          },
+          "q2": {
+            "n": 29470,
+            "mean_delta_rms": 0.13011797871687147
+          },
+          "q3": {
+            "n": 29470,
+            "mean_delta_rms": 0.15304571183699853
+          },
+          "q4": {
+            "n": 29470,
+            "mean_delta_rms": 0.17705138563113695
+          }
+        },
+        "rna_interface_ratio": 0.9596863389417796,
+        "rna_native_minus_token_off_interface_nll": -0.04111529926875401,
+        "rna_native_minus_permutation_interface_nll": 0.003769728104154435,
+        "rna_delta_rms_by_distance_to_interface": {
+          "0": {
+            "n": 6709,
+            "mean_delta_rms": 0.3045357507067033
+          },
+          "1-2": {
+            "n": 2674,
+            "mean_delta_rms": 0.173058858578753
+          },
+          "3-5": {
+            "n": 1924,
+            "mean_delta_rms": 0.028918893178615124
+          },
+          "6+": {
+            "n": 6910,
+            "mean_delta_rms": 0.013063651674956774
+          }
+        },
+        "rna_delta_rms_by_prior_confidence_nll_bin": {
+          "q1": {
+            "n": 4554,
+            "mean_delta_rms": 0.11935549872208732
+          },
+          "q2": {
+            "n": 4554,
+            "mean_delta_rms": 0.1360072850952801
+          },
+          "q3": {
+            "n": 4554,
+            "mean_delta_rms": 0.15570147878412266
+          },
+          "q4": {
+            "n": 4555,
+            "mean_delta_rms": 0.17119931306109307
+          }
+        },
+        "relative_interface_nll": 0.9541376678968183,
+        "worst_direction_ratio": 0.9596863389417796,
+        "partner_gate_pass": true,
+        "native_better_than_token_off": {
+          "protein": true,
+          "rna": true
+        }
+      },
+      "config": {
+        "geometry": "G2",
+        "aggregation": "A2",
+        "hidden_dim": 128,
+        "hidden_projection_dim": 64,
+        "edge_dim": 64,
+        "token_dim": 64,
+        "message_dim": 128,
+        "layers": 1,
+        "dropout": 0.1,
+        "rbf_bins": 16,
+        "separate_edge_encoders": false,
+        "sequence_independent_attention": true,
+        "partner_centered_residual": true,
+        "modality_projector": true,
+        "conservative_gate": false,
+        "gate_init": 0.1
+      },
+      "radius": 14.357456359863283,
+      "neighbors": 12,
+      "r2p_neighbors": 8,
+      "p2r_neighbors": 12,
+      "seed": 20260918,
+      "batch_size": 16,
+      "checkpoint": "F:\\111临时\\PR PILOT\\pilot_adapter_v2_20260917\\C3\\fold1\\best.pt",
+      "diagnostics": "F:\\111临时\\PR PILOT\\pilot_adapter_v2_20260917\\C3\\fold1\\diagnostics.json",
+      "test_read": false
+    },
+    {
+      "experiment": "C3",
+      "fold": 2,
+      "train_complexes": 667,
+      "val_complexes": 333,
+      "epochs_run": 22,
+      "best_epoch": 4,
+      "best_selection_score": 0.9620561457087603,
+      "best_partner_gate_pass": true,
+      "best_validation": {
+        "protein_all_nll": 2.264807990542403,
+        "protein_all_prior_nll": 2.2903285311149046,
+        "protein_all_recovery": 0.2977255335351726,
+        "protein_active_nll": 2.3068903022342258,
+        "protein_active_prior_nll": 2.358497713063214,
+        "protein_active_recovery": 0.28121207685799926,
+        "protein_interface_nll": 2.473622114092738,
+        "protein_interface_prior_nll": 2.592509342564477,
+        "protein_interface_recovery": 0.2228873799871038,
+        "protein_token_off_interface_nll": 2.585710166989862,
+        "protein_partner_permutation_interface_nll": 2.4711731625748827,
+        "protein_null_weight_mean": 0.6912057597984422,
+        "protein_null_weight_median": 0.8257566433142614,
+        "protein_gate": 1.0,
+        "protein_delta_rms": 0.3721766102242398,
+        "protein_prior_logits_rms": 3.972913433481623,
+        "protein_delta_prior_rms_ratio": 0.09435963232417006,
+        "rna_all_nll": 1.2474182706337433,
+        "rna_all_prior_nll": 1.2903958179571249,
+        "rna_all_recovery": 0.43820526001152693,
+        "rna_active_nll": 1.2454143733054668,
+        "rna_active_prior_nll": 1.2910803335385996,
+        "rna_active_recovery": 0.4399123942373214,
+        "rna_interface_nll": 1.2527847863263912,
+        "rna_interface_prior_nll": 1.302195081615949,
+        "rna_interface_recovery": 0.43524599567547934,
+        "rna_token_off_interface_nll": 1.2995813152901046,
+        "rna_partner_permutation_interface_nll": 1.2616433081952658,
+        "rna_null_weight_mean": 0.3312620173121716,
+        "rna_null_weight_median": 0.29319166642678035,
+        "rna_gate": 1.0,
+        "rna_delta_rms": 0.32385287351078457,
+        "rna_prior_logits_rms": 1.957938367540056,
+        "rna_delta_prior_rms_ratio": 0.1760372401357771,
+        "protein_interface_ratio": 0.9541420250566437,
+        "protein_native_minus_token_off_interface_nll": -0.11208805289712398,
+        "protein_native_minus_permutation_interface_nll": 0.002448951517855402,
+        "protein_delta_rms_by_distance_to_interface": {
+          "0": {
+            "n": 24582,
+            "mean_delta_rms": 0.3650460684070817
+          },
+          "1-2": {
+            "n": 25573,
+            "mean_delta_rms": 0.28682292571627616
+          },
+          "3-5": {
+            "n": 21575,
+            "mean_delta_rms": 0.14400908026814047
+          },
+          "6+": {
+            "n": 99103,
+            "mean_delta_rms": 0.035692435416112736
+          }
+        },
+        "protein_delta_rms_by_prior_confidence_nll_bin": {
+          "q1": {
+            "n": 42708,
+            "mean_delta_rms": 0.12053942173884091
+          },
+          "q2": {
+            "n": 42708,
+            "mean_delta_rms": 0.12802702597534069
+          },
+          "q3": {
+            "n": 42708,
+            "mean_delta_rms": 0.137322455309307
+          },
+          "q4": {
+            "n": 42709,
+            "mean_delta_rms": 0.1515410146907259
+          }
+        },
+        "rna_interface_ratio": 0.962056149660585,
+        "rna_native_minus_token_off_interface_nll": -0.046796528963713335,
+        "rna_native_minus_permutation_interface_nll": -0.008858521868874591,
+        "rna_delta_rms_by_distance_to_interface": {
+          "0": {
+            "n": 8097,
+            "mean_delta_rms": 0.3141211466105765
+          },
+          "1-2": {
+            "n": 2443,
+            "mean_delta_rms": 0.1625081006246167
+          },
+          "3-5": {
+            "n": 1538,
+            "mean_delta_rms": 0.03498878787539328
+          },
+          "6+": {
+            "n": 2726,
+            "mean_delta_rms": 0.020417011476867312
+          }
+        },
+        "rna_delta_rms_by_prior_confidence_nll_bin": {
+          "q1": {
+            "n": 3701,
+            "mean_delta_rms": 0.13829928206647774
+          },
+          "q2": {
+            "n": 3701,
+            "mean_delta_rms": 0.2193739316767191
+          },
+          "q3": {
+            "n": 3701,
+            "mean_delta_rms": 0.23542795704979166
+          },
+          "q4": {
+            "n": 3701,
+            "mean_delta_rms": 0.2309776573534778
+          }
+        },
+        "relative_interface_nll": 0.9580990873586144,
+        "worst_direction_ratio": 0.962056149660585,
+        "partner_gate_pass": true,
+        "native_better_than_token_off": {
+          "protein": true,
+          "rna": true
+        }
+      },
+      "config": {
+        "geometry": "G2",
+        "aggregation": "A2",
+        "hidden_dim": 128,
+        "hidden_projection_dim": 64,
+        "edge_dim": 64,
+        "token_dim": 64,
+        "message_dim": 128,
+        "layers": 1,
+        "dropout": 0.1,
+        "rbf_bins": 16,
+        "separate_edge_encoders": false,
+        "sequence_independent_attention": true,
+        "partner_centered_residual": true,
+        "modality_projector": true,
+        "conservative_gate": false,
+        "gate_init": 0.1
+      },
+      "radius": 14.357456359863283,
+      "neighbors": 12,
+      "r2p_neighbors": 8,
+      "p2r_neighbors": 12,
+      "seed": 20260919,
+      "batch_size": 16,
+      "checkpoint": "F:\\111临时\\PR PILOT\\pilot_adapter_v2_20260917\\C3\\fold2\\best.pt",
+      "diagnostics": "F:\\111临时\\PR PILOT\\pilot_adapter_v2_20260917\\C3\\fold2\\diagnostics.json",
+      "test_read": false
+    }
+  ]
+}

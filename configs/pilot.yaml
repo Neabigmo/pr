@@ -34,6 +34,7 @@ structure_filters:
   max_total_tokens: 1000
   max_resolution_angstrom: 4.0
   allow_nmr_without_resolution: true
+  apply_resolution_method_filter: true
   interface_contact_angstrom: 6.0
   min_interfacial_residue_pairs: 3
   max_interface_missing_fraction: 0.10

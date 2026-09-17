@@ -15,6 +15,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from pr_pilot.evaluation.audit_metrics import multiclass_brier_score
+from pr_pilot.evaluation.paired_statistics import strict_align_pairs, signflip_test
+
 
 @dataclass(frozen=True)
 class MandatoryTest:
@@ -72,7 +75,12 @@ def token_metrics(df: pd.DataFrame, alphabet_size: int) -> dict[str, float]:
         raise ValueError(f"Prediction table missing {sorted(missing)}")
     if len(df) == 0:
         return {"n": 0, "nll": float("nan"), "normalized_nll": float("nan"), "perplexity": float("nan"), "recovery": float("nan")}
-    nll = float(-df["native_log_probability"].mean())
+    if df[list(required)].isna().any().any():
+        raise ValueError("Missing token prediction; do not silently average over a smaller token set")
+    logp = df["native_log_probability"].to_numpy(float)
+    if not np.isfinite(logp).all() or (logp > 1e-7).any():
+        raise ValueError("Native log probabilities must be finite and nonpositive")
+    nll = float(-logp.mean())
     return {"n": int(len(df)), "nll": nll, "normalized_nll": nll / math.log(alphabet_size), "perplexity": float(math.exp(min(nll, 50.0))), "recovery": float((df["native_token"] == df["predicted_token"]).mean())}
 
 
@@ -85,7 +93,12 @@ def macro_by_complex(df: pd.DataFrame, alphabet_size: int) -> pd.DataFrame:
 
 def expected_calibration_error(correct: np.ndarray, confidence: np.ndarray, bins: int = 15) -> float:
     correct = np.asarray(correct, float); confidence = np.asarray(confidence, float)
-    if correct.shape != confidence.shape: raise ValueError("correct/confidence shape mismatch")
+    if correct.shape != confidence.shape or correct.ndim != 1 or correct.size == 0:
+        raise ValueError("ECE requires aligned nonempty vectors")
+    if not isinstance(bins, int) or isinstance(bins, bool) or bins < 1:
+        raise ValueError("bins must be a positive integer")
+    if not np.isin(correct, [0, 1]).all() or not np.isfinite(confidence).all() or ((confidence < 0) | (confidence > 1)).any():
+        raise ValueError("ECE needs binary correctness and finite [0,1] confidence")
     edges = np.linspace(0, 1, bins + 1); ece = 0.0
     for lo, hi in zip(edges[:-1], edges[1:]):
         mask = (confidence >= lo) & (confidence < (hi if hi < 1 else hi + 1e-12))
@@ -93,29 +106,52 @@ def expected_calibration_error(correct: np.ndarray, confidence: np.ndarray, bins
     return float(ece)
 
 
-def brier_multiclass(native_probability: np.ndarray, max_probability: np.ndarray, correct: np.ndarray) -> float:
-    correct = np.asarray(correct, float); max_probability = np.asarray(max_probability, float)
-    return float(np.mean((max_probability - correct) ** 2))
+def brier_multiclass(probabilities: np.ndarray, targets: np.ndarray, correct=None) -> float:
+    """Correct multiclass Brier; intentionally reject the old three-scalar API.
+
+    Migration: pass [N,K] probabilities and [N] integer labels. The old inputs
+    only determine a top-label binary error and cannot recover multiclass Brier.
+    This fail-closed change prevents publishing a plausible but wrong metric.
+    """
+    if correct is not None:
+        raise ValueError("Legacy three-scalar Brier is invalid. Pass full probabilities and labels, "
+                         "or explicitly use audit_metrics.top_label_brier_score.")
+    return multiclass_brier_score(probabilities, targets)
 
 
 def native_probability_brier(native_probability: np.ndarray) -> float:
-    p = np.asarray(native_probability, float); return float(np.mean((1.0 - p) ** 2))
+    raise ValueError("Native probability alone is insufficient for multiclass Brier. "
+                     "Export the full probability vector; (1-p_native)^2 is not multiclass Brier.")
 
 
 def paired_bootstrap(a: pd.Series, b: pd.Series, resamples: int = 10000, seed: int = 20260905, statistic: Callable[[np.ndarray], float] = np.mean) -> dict[str, float]:
-    aligned = pd.concat([a.rename("a"), b.rename("b")], axis=1).dropna(); diff = (aligned["a"] - aligned["b"]).to_numpy(float)
+    aligned = strict_align_pairs(a, b); diff = (aligned["a"] - aligned["b"]).to_numpy(float)
+    if not isinstance(resamples, int) or isinstance(resamples, bool) or resamples < 1:
+        raise ValueError("resamples must be a positive integer")
     if len(diff) < 2: raise ValueError("Need >=2 paired targets")
     rng = np.random.default_rng(seed); n = len(diff); boot = np.empty(resamples)
     for i in range(resamples): boot[i] = statistic(diff[rng.integers(0, n, size=n)])
-    return {"n": n, "effect": float(statistic(diff)), "ci_low": float(np.quantile(boot, .025)), "ci_high": float(np.quantile(boot, .975)), "bootstrap_p_two_sided": float(min(1.0, 2 * min((boot <= 0).mean(), (boot >= 0).mean())))}
+    test = signflip_test(diff, alternative="two-sided", resamples=resamples, seed=seed + 1, statistic=statistic)
+    return {"n": n, "effect": float(statistic(diff)), "ci_low": float(np.quantile(boot, .025)),
+            "ci_high": float(np.quantile(boot, .975)),
+            # Backward-compatible key, now an explicitly labelled permutation p.
+            "bootstrap_p_two_sided": test["p"], "permutation_p_two_sided": test["p"],
+            "p_method": test["method"], "legacy_p_key_is_permutation_alias": True}
 
 
 def paired_wilcoxon(a: pd.Series, b: pd.Series) -> dict[str, float]:
-    aligned = pd.concat([a.rename("a"), b.rename("b")], axis=1).dropna(); result = stats.wilcoxon(aligned["a"], aligned["b"], alternative="two-sided", zero_method="wilcox")
+    aligned = strict_align_pairs(a, b)
+    if len(aligned) < 2:
+        raise ValueError("Need >=2 paired targets")
+    if np.all(aligned["a"].to_numpy() == aligned["b"].to_numpy()):
+        return {"n": int(len(aligned)), "statistic": 0.0, "p": 1.0}
+    result = stats.wilcoxon(aligned["a"], aligned["b"], alternative="two-sided", zero_method="wilcox")
     return {"n": int(len(aligned)), "statistic": float(result.statistic), "p": float(result.pvalue)}
 
 
 def holm_adjust(pvalues: dict[str, float]) -> dict[str, float]:
+    if any(not math.isfinite(p) or not 0 <= p <= 1 for p in pvalues.values()):
+        raise ValueError("p values must be finite and in [0,1]")
     items = sorted(pvalues.items(), key=lambda kv: kv[1]); m = len(items); adjusted = {}; running = 0.0
     for rank, (name, p) in enumerate(items):
         value = min(1.0, (m - rank) * p); running = max(running, value); adjusted[name] = running
@@ -123,6 +159,8 @@ def holm_adjust(pvalues: dict[str, float]) -> dict[str, float]:
 
 
 def bh_adjust(pvalues: dict[str, float]) -> dict[str, float]:
+    if any(not math.isfinite(p) or not 0 <= p <= 1 for p in pvalues.values()):
+        raise ValueError("p values must be finite and in [0,1]")
     items = sorted(pvalues.items(), key=lambda kv: kv[1], reverse=True); m = len(items); adjusted = {}; running = 1.0
     for reverse_rank, (name, p) in enumerate(items, start=1):
         rank = m - reverse_rank + 1; value = min(1.0, p * m / rank); running = min(running, value); adjusted[name] = running
@@ -130,12 +168,16 @@ def bh_adjust(pvalues: dict[str, float]) -> dict[str, float]:
 
 
 def partner_scramble_delta(native_nll: pd.Series, scrambled_nll: pd.Series) -> pd.Series:
-    aligned = pd.concat([native_nll.rename("native"), scrambled_nll.rename("scrambled")], axis=1).dropna(); return aligned["scrambled"] - aligned["native"]
+    aligned = strict_align_pairs(native_nll, scrambled_nll); return aligned["b"] - aligned["a"]
 
 
 def empirical_pmi(counts_20x4: np.ndarray, pseudocount: float = .5) -> np.ndarray:
     counts = np.asarray(counts_20x4, float)
     if counts.shape != (20, 4): raise ValueError("Expected 20x4 counts")
+    if not np.isfinite(counts).all() or (counts < 0).any() or counts.sum() <= 0:
+        raise ValueError("PMI requires actual finite, nonnegative observed contacts")
+    if not math.isfinite(pseudocount) or pseudocount <= 0:
+        raise ValueError("pseudocount must be positive and finite")
     counts = counts + pseudocount; p = counts / counts.sum(); pa = p.sum(1, keepdims=True); pb = p.sum(0, keepdims=True); return np.log(p / (pa * pb))
 
 

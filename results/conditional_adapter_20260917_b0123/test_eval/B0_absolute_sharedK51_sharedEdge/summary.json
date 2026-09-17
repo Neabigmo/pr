@@ -1,0 +1,222 @@
+{
+  "checkpoint": "F:\\111\u4e34\u65f6\\PR PILOT\\pilot_conditional_adapter_20260917_b0123\\balance\\B0_absolute_sharedK51_sharedEdge\\best.pt",
+  "test_complexes": 86,
+  "common_rna_positions": 2440,
+  "metrics": [
+    {
+      "polymer": "protein",
+      "subset": "active",
+      "nll_adapter": 2.215360780094945,
+      "nll_prior": 2.2535507734431777,
+      "recovery_adapter": 0.31625497341156006,
+      "recovery_prior": 0.3146341593806134,
+      "delta_nll_prior_minus_adapter": 0.03818999334823254,
+      "delta_recovery_adapter_minus_prior": 0.0016208140309466872
+    },
+    {
+      "polymer": "protein",
+      "subset": "all",
+      "nll_adapter": 2.123984684777814,
+      "nll_prior": 2.1431104166563166,
+      "recovery_adapter": 0.34539374518533084,
+      "recovery_prior": 0.34577166323744973,
+      "delta_nll_prior_minus_adapter": 0.019125731878502424,
+      "delta_recovery_adapter_minus_prior": -0.00037791805211887804
+    },
+    {
+      "polymer": "protein",
+      "subset": "interface",
+      "nll_adapter": 2.2680361257042994,
+      "nll_prior": 2.382250655529111,
+      "recovery_adapter": 0.29089987000753714,
+      "recovery_prior": 0.27735783471617587,
+      "delta_nll_prior_minus_adapter": 0.11421452982481135,
+      "delta_recovery_adapter_minus_prior": 0.013542035291361254
+    },
+    {
+      "polymer": "rna",
+      "subset": "active",
+      "nll_adapter": 1.1737355867097543,
+      "nll_prior": 1.1255704261535822,
+      "recovery_adapter": 0.4815589231547228,
+      "recovery_prior": 0.5171752092103625,
+      "delta_nll_prior_minus_adapter": -0.04816516055617222,
+      "delta_recovery_adapter_minus_prior": -0.03561628605563973
+    },
+    {
+      "polymer": "rna",
+      "subset": "all",
+      "nll_adapter": 1.2001727701619613,
+      "nll_prior": 1.1551054418087006,
+      "recovery_adapter": 0.4710732690210259,
+      "recovery_prior": 0.5020367031873658,
+      "delta_nll_prior_minus_adapter": -0.04506732835326084,
+      "delta_recovery_adapter_minus_prior": -0.03096343416633994
+    },
+    {
+      "polymer": "rna",
+      "subset": "interface",
+      "nll_adapter": 1.1956739169220592,
+      "nll_prior": 1.1492097232230873,
+      "recovery_adapter": 0.47245809214926043,
+      "recovery_prior": 0.5037782312652399,
+      "delta_nll_prior_minus_adapter": -0.04646419369897177,
+      "delta_recovery_adapter_minus_prior": -0.03132013911597951
+    }
+  ],
+  "native_vs_token_off": [
+    {
+      "polymer": "protein",
+      "subset": "active",
+      "nll_adapter": 2.215360780094945,
+      "nll_token_off": 2.2230231761932373,
+      "delta_nll_token_off_minus_native": 0.0076623960982921515
+    },
+    {
+      "polymer": "protein",
+      "subset": "all",
+      "nll_adapter": 2.123984684777814,
+      "nll_token_off": 2.1265478064847545,
+      "delta_nll_token_off_minus_native": 0.002563121706940407
+    },
+    {
+      "polymer": "protein",
+      "subset": "interface",
+      "nll_adapter": 2.2680361257042994,
+      "nll_token_off": 2.2755826767100844,
+      "delta_nll_token_off_minus_native": 0.0075465510057848555
+    },
+    {
+      "polymer": "rna",
+      "subset": "active",
+      "nll_adapter": 1.1737355867097543,
+      "nll_token_off": 1.1620732337929482,
+      "delta_nll_token_off_minus_native": -0.011662352916806243
+    },
+    {
+      "polymer": "rna",
+      "subset": "all",
+      "nll_adapter": 1.2001727701619613,
+      "nll_token_off": 1.189252372397933,
+      "delta_nll_token_off_minus_native": -0.010920397764028505
+    },
+    {
+      "polymer": "rna",
+      "subset": "interface",
+      "nll_adapter": 1.1956739169220592,
+      "nll_token_off": 1.1854420373606127,
+      "delta_nll_token_off_minus_native": -0.010231879561446434
+    }
+  ],
+  "paired_bootstrap": {
+    "protein_all_nll": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": -0.019125731878502424,
+      "ci95": [
+        -0.021677027088265088,
+        -0.016610707169355348
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "protein_all_recovery": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": -0.00037791805211887804,
+      "ci95": [
+        -0.0022459503956312357,
+        0.001550354635299638
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "protein_active_nll": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": -0.03818999334823254,
+      "ci95": [
+        -0.044549112403115564,
+        -0.03187104442784953
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "protein_active_recovery": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": 0.0016208140309466872,
+      "ci95": [
+        -0.0025237877571652103,
+        0.005806715019740337
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "protein_interface_nll": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": -0.11421452982481135,
+      "ci95": [
+        -0.12492563606694687,
+        -0.1035149399970853
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "protein_interface_recovery": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": 0.013542035291361254,
+      "ci95": [
+        0.005710317077505034,
+        0.021392835992886574
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "rna_all_nll": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": 0.04506732835326084,
+      "ci95": [
+        0.014780966868234236,
+        0.0767428251199944
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "rna_all_recovery": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": -0.03096343416633994,
+      "ci95": [
+        -0.05302679726182548,
+        -0.009632901276656718
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "rna_active_nll": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": 0.04816516055617222,
+      "ci95": [
+        0.016122819951107335,
+        0.08146397045185398
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "rna_active_recovery": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": -0.03561628605563973,
+      "ci95": [
+        -0.05869315027605829,
+        -0.013165850139244704
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "rna_interface_nll": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": 0.04646419369897177,
+      "ci95": [
+        0.013349126660546592,
+        0.08114744157985196
+      ],
+      "bootstrap_repeats": 10000
+    },
+    "rna_interface_recovery": {
+      "n_complex": 86,
+      "mean_delta_a_minus_b": -0.03132013911597951,
+      "ci95": [
+        -0.05604563205892783,
+        -0.006638828204771468
+      ],
+      "bootstrap_repeats": 10000
+    }
+  },
+  "test_used_only_after_selection": true
+}

@@ -1,3 +1,6 @@
+<!-- REVIEW4-ROUTING-2026-09-05 -->
+> **Review-4 routing notice (2026-09-05).** See [INDEX_REVIEW4.md](INDEX_REVIEW4.md) and the Review-4 runbook for updated contracts, known incompatibilities and outstanding integration gates. The original text below is preserved as historical context; it is not a claim that the new protocol or real experiments have passed.
+
 # 给 Codex：PR Mini-Pilot 第二轮审阅后的修复与执行计划
 
 > 目标：不要继续堆功能。先把当前 mini-pilot 从“逻辑完整的研究代码”收敛成“真正可运行、定义一致、可公平比较、可写进论文的方法与实验系统”。

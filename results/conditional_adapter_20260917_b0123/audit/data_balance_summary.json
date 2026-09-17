@@ -1,0 +1,185 @@
+{
+  "train_complexes": 900,
+  "val_complexes": 100,
+  "radius": 14.3574563598633,
+  "shared_k": 51,
+  "r2p_k": 8,
+  "p2r_k": 12,
+  "definition": "contact partner counts are per-target counts of residue partners with minimum full heavy-atom distance <5 A; selected graph edges use the cached anchor-radius graph",
+  "splits": {
+    "train": {
+      "complexes": 900,
+      "protein_length": {
+        "mean": 436.77444444444444,
+        "median": 436.5,
+        "q95": 864.0,
+        "q99": 938.0699999999999,
+        "max": 971.0
+      },
+      "rna_length": {
+        "mean": 71.87222222222222,
+        "median": 49.0,
+        "q95": 195.04999999999995,
+        "q99": 500.14999999999986,
+        "max": 552.0
+      },
+      "protein_active_nodes_contact": {
+        "mean": 52.528888888888886,
+        "median": 46.0,
+        "q95": 116.0,
+        "q99": 153.02999999999997,
+        "max": 193.0
+      },
+      "rna_active_nodes_contact": {
+        "mean": 22.213333333333335,
+        "median": 19.0,
+        "q95": 48.0,
+        "q99": 62.01999999999998,
+        "max": 104.0
+      },
+      "protein_interface_nodes": {
+        "mean": 65.38666666666667,
+        "median": 55.0,
+        "q95": 148.0,
+        "q99": 201.01,
+        "max": 233.0
+      },
+      "rna_interface_nodes": {
+        "mean": 24.536666666666665,
+        "median": 21.0,
+        "q95": 53.0,
+        "q99": 69.0,
+        "max": 104.0
+      },
+      "contact_partner_count_quantiles": {
+        "protein_target": {
+          "all_targets": {
+            "mean": 0.22342831413111777,
+            "median": 0.0,
+            "q95": 2.0,
+            "q99": 3.0,
+            "max": 11.0
+          },
+          "active_targets_only": {
+            "mean": 1.8577925374397157,
+            "median": 2.0,
+            "q95": 4.0,
+            "q99": 5.0,
+            "max": 11.0
+          }
+        },
+        "rna_target": {
+          "all_targets": {
+            "mean": 1.3577954703563422,
+            "median": 0.0,
+            "q95": 8.0,
+            "q99": 12.0,
+            "max": 23.0
+          },
+          "active_targets_only": {
+            "mean": 4.393207282913165,
+            "median": 4.0,
+            "q95": 11.0,
+            "q99": 14.0,
+            "max": 23.0
+          }
+        }
+      },
+      "edge_totals": {
+        "shared_k": 631762,
+        "r2p_k": 592363,
+        "p2r_k": 278817,
+        "r2p_target_nodes": 148013,
+        "p2r_target_nodes": 28914,
+        "p2r_edges_over_r2p_target_nodes": 1.8837331855985624
+      }
+    },
+    "val": {
+      "complexes": 100,
+      "protein_length": {
+        "mean": 471.66,
+        "median": 391.5,
+        "q95": 862.5,
+        "q99": 926.0,
+        "max": 926.0
+      },
+      "rna_length": {
+        "mean": 37.49,
+        "median": 25.5,
+        "q95": 103.14999999999999,
+        "q99": 180.1800000000001,
+        "max": 198.0
+      },
+      "protein_active_nodes_contact": {
+        "mean": 51.93,
+        "median": 48.0,
+        "q95": 106.14999999999999,
+        "q99": 122.05000000000003,
+        "max": 127.0
+      },
+      "rna_active_nodes_contact": {
+        "mean": 19.49,
+        "median": 16.0,
+        "q95": 42.0,
+        "q99": 48.06000000000003,
+        "max": 54.0
+      },
+      "protein_interface_nodes": {
+        "mean": 64.95,
+        "median": 59.5,
+        "q95": 136.1,
+        "q99": 146.08000000000004,
+        "max": 154.0
+      },
+      "rna_interface_nodes": {
+        "mean": 21.23,
+        "median": 17.0,
+        "q95": 46.0,
+        "q99": 56.010000000000005,
+        "max": 57.0
+      },
+      "contact_partner_count_quantiles": {
+        "protein_target": {
+          "all_targets": {
+            "mean": 0.19679430097951914,
+            "median": 0.0,
+            "q95": 2.0,
+            "q99": 3.0,
+            "max": 12.0
+          },
+          "active_targets_only": {
+            "mean": 1.7874061236279608,
+            "median": 2.0,
+            "q95": 4.0,
+            "q99": 5.0,
+            "max": 12.0
+          }
+        },
+        "rna_target": {
+          "all_targets": {
+            "mean": 2.475860229394505,
+            "median": 1.0,
+            "q95": 10.0,
+            "q99": 15.0,
+            "max": 19.0
+          },
+          "active_targets_only": {
+            "mean": 4.762442278091329,
+            "median": 4.0,
+            "q95": 12.0,
+            "q99": 16.0,
+            "max": 19.0
+          }
+        }
+      },
+      "edge_totals": {
+        "shared_k": 63831,
+        "r2p_k": 61414,
+        "p2r_k": 25582,
+        "r2p_target_nodes": 17197,
+        "p2r_target_nodes": 2559,
+        "p2r_edges_over_r2p_target_nodes": 1.4875850439030063
+      }
+    }
+  }
+}

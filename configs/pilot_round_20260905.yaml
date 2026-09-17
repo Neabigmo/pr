@@ -1,0 +1,188 @@
+experiment:
+  name: dmicf_round_20260905_exception
+  pilot_seed: 20260905
+  strict_mode: true
+  output_root: artifacts
+  fail_on_test_leakage: true
+  primary_training_seeds: [20260905, 20260906, 20260907]
+  analysis_seed: 20260905
+
+sampling:
+  protein_pool_size: 1000
+  protein_train: 900
+  protein_val: 100
+  rna_pool_size: 1000
+  rna_train: 900
+  rna_val: 100
+  complex_pool_size: 1086
+  complex_dev: 1000
+  complex_test: 86
+  complex_train: 900
+  complex_val: 100
+  final_refit_on_full_dev: true
+  final_refit_rule: "use validation-selected epoch count; replay the development schedule prefix without compression"
+  forbid_predicted_structures: true
+
+structure_filters:
+  protein_min_length: 40
+  protein_max_length: 2000
+  rna_min_length: 10
+  rna_max_length: 500
+  apply_resolution_method_filter: false
+  exclude_ribosome: true
+  exclude_spliceosome: true
+  require_biological_assembly: true
+  max_total_tokens: 1000
+  max_resolution_angstrom: 4.0
+  allow_nmr_without_resolution: true
+  interface_contact_angstrom: 6.0
+  min_interfacial_residue_pairs: 3
+  max_interface_missing_fraction: 0.10
+
+leakage:
+  protein_strict_cluster: P30
+  rna_sequence_cluster: R80
+  require_rfam_holdout_when_available: true
+  strict_validation: true
+  purge_final_test_from_single_molecule_pretraining: true
+
+geometry:
+  hidden_dim: 256
+  protein_layers: 6
+  rna_layers: 6
+  decoder_layers: 2
+  interaction_layers: 3
+  pr_cutoff_angstrom: 8.0
+  pr_max_neighbors: 12
+  intra_max_neighbors: 32
+  rbf_bins: 24
+  coordinate_noise_angstrom: 0.10
+  edge_dropout: 0.05
+  pr_edge_dropout: 0.05
+  drop_path: 0.05
+  rich_pr_geometry: true
+  prohibit_rna_base_identity_atoms: true
+
+masking:
+  min_fraction: 0.10
+  max_fraction: 1.00
+  curriculum: true
+  full_mask_probability: 0.15
+  random_mask_probability: 0.70
+  local_patch_probability: 0.30
+  wrong_token_fraction_within_corruption: 0.10
+  interface_mask_multiplier: 2.0
+  partner_token_dropout: 0.15
+
+loss:
+  protein_label_smoothing: 0.05
+  rna_label_smoothing: 0.05
+  c_l2_enabled: false
+  c_l2_target_fraction: 0.02
+  alpha_entropy_warmup_weight: 0.01
+  alpha_entropy_warmup_fraction: 0.10
+
+optimization:
+  lr_heads: 0.001
+  lr_projections: 0.0005
+  lr_encoder_top: 0.0001
+  lr_encoder_bottom: 0.00002
+  lr_global_c_joint: 0.0
+  weight_decay: 0.01
+  warmup_fraction: 0.04
+  grad_clip_norm: 1.0
+  precision: bf16
+  # CPU-side structure prefetch workers; zero preserves the serial reference path.
+  data_workers: 0
+  # Process backend is intended for Linux hosts; the portable default is threads.
+  data_prefetch_backend: thread
+  layerwise_lr_decay: 0.85
+  early_stopping_patience: 15
+  max_epochs_default: 100
+
+training_stages:
+  protein_prior:
+    enabled: true
+    max_epochs: 150
+  rna_prior:
+    enabled: true
+    max_epochs: 150
+  global_c:
+    enabled: true
+    max_epochs: 80
+    conditional_task_ratio: [1, 1]
+    hard_context_fraction_late: 0.0
+    lambda_fixed_to_one: true
+  delta_c:
+    enabled: true
+    max_epochs: 100
+    zero_init_output: true
+    hard_context_fraction_late: 0.0
+    lambda_fixed_to_one: true
+  alpha:
+    enabled: true
+    max_epochs: 80
+    zero_init_score_residual: true
+    hard_context_fraction_late: 0.0
+    lambda_fixed_to_one: true
+    freeze_interaction_and_delta: true
+  joint:
+    enabled: true
+    max_epochs: 150
+    task_ratio_start: [2, 2, 1]
+    task_ratio_end: [1, 1, 1]
+    unfreezing_mode: gradual
+    learn_bounded_lambda: true
+    freeze_global_c: true
+
+fairness_controls:
+  partner_blind_complex_control: true
+  no_partner_identity_capacity_control: true
+  global_c_backbone_only_context_control: true
+  parameter_count_report: true
+  rich_geometry_vs_distance_only: true
+  fixed_distance_alpha_vs_learned_alpha: true
+  fixed_training_pmi_matrix_baseline: true
+  official_baselines_primary_from_scratch: true
+  official_baselines_use_same_single_molecule_ids: true
+  baseline_final_refit_on_full_1000: true
+  external_published_checkpoints_report_separately: true
+  matched_candidate_budget: true
+  matched_external_predictor_budget: true
+
+inference:
+  candidates_per_complex: 64
+  ablation_candidates_per_complex: 16
+  initial_temperature: 1.0
+  spir:
+    enabled: true
+    reopen_fraction: 0.30
+    temperature: 0.5
+    reverse_direction_fraction: 0.5
+    cycles: 1
+
+evaluation:
+  statistical_unit: complex
+  joint_teacher_forced_orders: 5
+  joint_validation_max_complexes: 20
+  scramble_repeats: 20
+  counterfactual_max_partner_sites: 16
+  geometry_permutation_repeats: 10
+  alpha_ablation_max_targets: 32
+  repeated_spir_cycles: 3
+  pmi_permutation_repeats: 1000
+  noise_levels_angstrom: [0.0, 0.05, 0.10, 0.20]
+  pr_edge_drop_levels: [0.0, 0.05, 0.10, 0.20]
+  partner_hide_levels: [0.0, 0.10, 0.20, 0.40]
+  bootstrap_resamples: 10000
+  primary_multiple_testing: holm
+  exploratory_multiple_testing: bh
+  primary_hypotheses:
+    - full_vs_dual_prior_interface_nll
+    - full_vs_partner_identity_controls
+    - contextual_vs_global_c
+    - partner_scramble
+    - alpha_edge_removal
+  data_efficiency_fractions: [0.10, 0.25, 0.50, 1.00]
+  runtime_profile_complexes: 10
+  full_diagnostic_seed: 20260905

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate immutable one-sided baselines on the frozen final 100 complexes.
+"""Evaluate immutable one-sided baselines on the frozen final complex set.
 
 ProteinMPNN receives only Protein coordinates. NA-MPNN receives only RNA
 coordinates. Their outputs are normalized into the same per-position reporting
@@ -196,13 +196,16 @@ def evaluate(
     output: Path,
     third_party_root: Path,
     na_probability_samples: int = 64,
+    expected_complexes: int | None = None,
 ) -> dict:
     upstream = _clone_locked(repo_root, third_party_root)
     runs = json.loads(baseline_summary.read_text(encoding="utf-8"))
     samples = pd.read_csv(prepared_holdout / "samples.tsv", sep="\t")
     mapping = pd.read_csv(prepared_holdout / "position_mapping.tsv", sep="\t")
-    if len(samples) != 100:
-        raise ValueError(f"Expected frozen 100 complex views, found {len(samples)}")
+    if expected_complexes is not None and len(samples) != int(expected_complexes):
+        raise ValueError(
+            f"Expected {int(expected_complexes)} frozen complex views, found {len(samples)}"
+        )
     output.mkdir(parents=True, exist_ok=True)
 
     all_rows = []
@@ -272,8 +275,26 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--third-party-root", type=Path, default=Path("third_party/checkouts"))
     parser.add_argument("--na-probability-samples", type=int, default=64)
+    parser.add_argument(
+        "--expected-complexes",
+        type=int,
+        help="Optional explicit frozen-test count; omitted means accept the supplied frozen manifest count.",
+    )
     args = parser.parse_args()
-    print(json.dumps(evaluate(args.repo_root.resolve(), args.baseline_summary.resolve(), args.prepared_holdout.resolve(), args.out.resolve(), args.third_party_root.resolve(), args.na_probability_samples), indent=2))
+    print(
+        json.dumps(
+            evaluate(
+                args.repo_root.resolve(),
+                args.baseline_summary.resolve(),
+                args.prepared_holdout.resolve(),
+                args.out.resolve(),
+                args.third_party_root.resolve(),
+                args.na_probability_samples,
+                args.expected_complexes,
+            ),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
