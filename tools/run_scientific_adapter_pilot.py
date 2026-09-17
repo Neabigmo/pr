@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from statistics import median
 import sys
 import time
 from pathlib import Path
@@ -217,11 +218,13 @@ def _stage_specs(stage: str, base: dict) -> list[dict]:
         return [{**base, "interaction": value} for value in INTERACTIONS]
     if stage == "residual":
         return [{**base, "residual": value} for value in RESIDUALS]
+    if stage == "edge_encoder":
+        return [{**base, "separate_edge_encoders": value} for value in (False, True)]
     raise ValueError(f"unknown search stage {stage}")
 
 
 def _spec_name(spec: dict) -> str:
-    fields = [spec.get("geometry"), spec.get("r2p_k"), spec.get("p2r_k"), spec.get("radius"), spec.get("aggregation"), spec.get("interaction"), spec.get("residual")]
+    fields = [spec.get("geometry"), spec.get("r2p_k"), spec.get("p2r_k"), spec.get("radius"), spec.get("aggregation"), spec.get("interaction"), spec.get("residual"), "separate" if spec.get("separate_edge_encoders") else "shared"]
     return "_".join(str(value).replace(".", "p") for value in fields)
 
 
@@ -267,7 +270,7 @@ def run_search(args: argparse.Namespace) -> dict:
         "aggregation": "A2", "interaction": "concat", "residual": "partner_centered",
         "separate_edge_encoders": False, "modality_projector": True,
     }
-    stage_order = [args.stage] if args.stage != "all" else ["geometry", "k", "radius", "aggregation", "interaction", "residual"]
+    stage_order = [args.stage] if args.stage != "all" else ["geometry", "k", "radius", "aggregation", "interaction", "residual", "edge_encoder"]
     selected = base
     reports = {}
     for stage in stage_order:
@@ -301,6 +304,101 @@ def run_search(args: argparse.Namespace) -> dict:
     return result
 
 
+def _train_full(spec: dict, data: list[dict], args: argparse.Namespace, target: Path, epochs: int) -> dict:
+    """Refit one locked configuration on all development complexes."""
+    seed = int(args.seed)
+    _seed_everything(seed)
+    radius = float(spec.get("radius", args.radius))
+    r2p_k = int(spec.get("r2p_k", args.r2p_k))
+    p2r_k = int(spec.get("p2r_k", args.p2r_k))
+    _attach_selected_edges(data, radius, args.neighbors, r2p_k, p2r_k, True)
+    model = ReciprocalAdapter(_config(spec)).to(args.device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.lr), weight_decay=1e-3)
+    manager = CheckpointManager(target, "train_loss")
+    order_rng = random.Random(seed)
+    history = []
+    for epoch in range(1, int(epochs) + 1):
+        started = time.perf_counter()
+        model.train()
+        order = list(range(len(data)))
+        order_rng.shuffle(order)
+        losses = []
+        for start in range(0, len(order), int(args.batch_size)):
+            payloads = [data[index] for index in order[start : start + int(args.batch_size)]]
+            packed = _collate_payloads(payloads, args.device)
+            optimizer.zero_grad(set_to_none=True)
+            out = model(
+                packed["protein_base"], packed["rna_base"], packed["protein_hidden"], packed["rna_hidden"],
+                packed["protein_native"], packed["rna_native"], packed["edge_index_r2p"], packed["edge_geometry_r2p"],
+                packed["edge_index_p2r"], packed["edge_geometry_p2r"],
+            )
+            p_loss = _batched_loss(out["protein_logits"], packed["protein_native"], packed["protein_active"], packed["protein_sample"], packed["batch_size"])
+            r_loss = _batched_loss(out["rna_logits"], packed["rna_native"], packed["rna_active"], packed["rna_sample"], packed["batch_size"])
+            p_prior = _batched_loss(packed["protein_base"].detach(), packed["protein_native"], packed["protein_active"], packed["protein_sample"], packed["batch_size"], log_probs=True)
+            r_prior = _batched_loss(packed["rna_base"].detach(), packed["rna_native"], packed["rna_active"], packed["rna_sample"], packed["batch_size"], log_probs=True)
+            loss = 0.5 * (p_loss / p_prior.clamp_min(1e-8) + r_loss / r_prior.clamp_min(1e-8))
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            losses.append(float(loss.detach().cpu()))
+        record = {"train_loss": float(np.mean(losses)), "epoch_seconds": time.perf_counter() - started}
+        history.append(record)
+        manager.save_epoch(model, optimizer, None, epoch, record, {"spec": spec, "seed": seed, "refit": True})
+    final = manager.save_final(model, int(epochs), history[-1], {"spec": spec, "seed": seed, "refit": True})
+    summary = {"spec": spec, "seed": seed, "development_complexes": len(data), "epochs": int(epochs), "final": str(final), "history": history, "test_read": False}
+    (target / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False, default=float), encoding="utf-8")
+    return summary
+
+
+def run_refit(args: argparse.Namespace) -> dict:
+    out = Path(args.out)
+    search_path = out / "search_summary.json"
+    if not search_path.exists():
+        raise FileNotFoundError(f"run search before refit: {search_path}")
+    search = json.loads(search_path.read_text(encoding="utf-8"))
+    spec = search["selected"]
+    residual_stage = search["stages"].get("residual")
+    if residual_stage is None:
+        raise ValueError("search summary has no completed residual stage")
+    epochs = int(round(median(item["best_epoch"] for item in residual_stage["selected"]["folds"])))
+    data = _load_cache(Path(args.cache_root), "train") + _load_cache(Path(args.cache_root), "val")
+    target = out / "refit" / "final"
+    if (target / "summary.json").exists() and not args.force:
+        summary = json.loads((target / "summary.json").read_text(encoding="utf-8"))
+    else:
+        summary = _train_full(spec, data, args, target, epochs)
+    lock = {"spec": spec, "epochs": epochs, "refit_summary": summary, "test_read": False, "holdout_locked": True}
+    (out / "final_lock.json").write_text(json.dumps(lock, indent=2, ensure_ascii=False, default=float), encoding="utf-8")
+    print(json.dumps(lock, indent=2, ensure_ascii=False, default=float), flush=True)
+    return lock
+
+
+def run_evaluate(args: argparse.Namespace) -> dict:
+    if not args.allow_final_holdout:
+        raise ValueError("holdout evaluation requires --allow-final-holdout")
+    out = Path(args.out)
+    lock_path = out / "final_lock.json"
+    if not lock_path.exists():
+        raise FileNotFoundError("final_lock.json is required before reading a test cache")
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    checkpoint = out / "refit" / "final" / "final.pt"
+    if not checkpoint.exists():
+        raise FileNotFoundError(checkpoint)
+    test_data = _load_cache(Path(args.test_cache), "test")
+    spec = lock["spec"]
+    radius = float(spec.get("radius", args.radius))
+    _attach_selected_edges(test_data, radius, args.neighbors, int(spec.get("r2p_k", args.r2p_k)), int(spec.get("p2r_k", args.p2r_k)), True)
+    model = ReciprocalAdapter(_config(spec)).to(args.device)
+    payload = torch.load(checkpoint, map_location=args.device, weights_only=False)
+    model.load_state_dict(payload["model"])
+    model.eval()
+    metrics = evaluate_dataset(model, test_data, args.device, radius, args.neighbors, include_permutation=True)
+    result = {"checkpoint": str(checkpoint), "test_complexes": len(test_data), "metrics": metrics, "test_used_only_after_final_lock": True, "spec": spec}
+    (out / "holdout_evaluation.json").write_text(json.dumps(result, indent=2, ensure_ascii=False, default=float), encoding="utf-8")
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=float), flush=True)
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -312,7 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight = sub.add_parser("preflight", parents=[common])
     preflight.set_defaults(func=run_preflight)
     search = sub.add_parser("search", parents=[common])
-    search.add_argument("--stage", choices=("all", "geometry", "k", "radius", "aggregation", "interaction", "residual"), default="all")
+    search.add_argument("--stage", choices=("all", "geometry", "k", "radius", "aggregation", "interaction", "residual", "edge_encoder"), default="all")
     search.add_argument("--device", default="cuda:0")
     search.add_argument("--radius", type=float, default=RADIUS)
     search.add_argument("--neighbors", type=int, default=32)
@@ -325,6 +423,25 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--resume", action="store_true")
     search.add_argument("--force", action="store_true")
     search.set_defaults(func=run_search)
+    refit = sub.add_parser("refit", parents=[common])
+    refit.add_argument("--device", default="cuda:0")
+    refit.add_argument("--radius", type=float, default=RADIUS)
+    refit.add_argument("--neighbors", type=int, default=32)
+    refit.add_argument("--r2p-k", type=int, default=8)
+    refit.add_argument("--p2r-k", type=int, default=12)
+    refit.add_argument("--lr", type=float, default=3e-4)
+    refit.add_argument("--batch-size", type=int, default=16)
+    refit.add_argument("--force", action="store_true")
+    refit.set_defaults(func=run_refit)
+    evaluate = sub.add_parser("evaluate", parents=[common])
+    evaluate.add_argument("--test-cache", type=Path, required=True)
+    evaluate.add_argument("--device", default="cuda:0")
+    evaluate.add_argument("--radius", type=float, default=RADIUS)
+    evaluate.add_argument("--neighbors", type=int, default=32)
+    evaluate.add_argument("--r2p-k", type=int, default=8)
+    evaluate.add_argument("--p2r-k", type=int, default=12)
+    evaluate.add_argument("--allow-final-holdout", action="store_true")
+    evaluate.set_defaults(func=run_evaluate)
     return parser
 
 
