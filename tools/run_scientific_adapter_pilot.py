@@ -58,7 +58,7 @@ DEFAULT_CACHE = Path(r"F:\111临时\PR PILOT\pilot_conditional_adapter_20260916\
 DEFAULT_MANIFESTS = Path(r"F:\111临时\PR PILOT\remote_return_20260911\manifests\round_20260905_exception_v2")
 DEFAULT_OUT = Path(r"I:\PR_PILOT_SCIENTIFIC\20260917\reports")
 RADIUS_OPTIONS = (13.308568573, 14.357456360, 14.979730606)
-_FOLD_WORKER_BY_ID: dict[str, dict] | None = None
+_FOLD_WORKER_BY_ID: dict[str, Path] | None = None
 
 
 def _seed_everything(seed: int) -> None:
@@ -107,6 +107,35 @@ def _score(metrics: dict) -> float:
     return max(float(metrics["protein_interface_ratio"]), float(metrics["rna_interface_ratio"]))
 
 
+def _cache_index(cache_root: Path) -> dict[str, Path]:
+    """Index immutable cache files without retaining their tensor payloads.
+
+    The scientific search trains one fold at a time when running in the
+    reliable single-worker mode.  Keeping all development payloads resident
+    while also materializing selected edges can push the Windows pagefile
+    above the size of the cache itself.  An ID-to-file index preserves the
+    cache contract and lets each fold own only its active payloads.
+    """
+    files = sorted((cache_root / "train").glob("*.pt")) + sorted((cache_root / "val").glob("*.pt"))
+    if not files:
+        raise FileNotFoundError(f"no development caches in {cache_root}")
+    index: dict[str, Path] = {}
+    for path in files:
+        payload = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
+        sample_id = str(payload["sample_id"])
+        if sample_id in index:
+            raise ValueError(f"duplicate cache sample_id: {sample_id}")
+        index[sample_id] = path
+    return index
+
+
+def _load_fold_payload(source: Path | dict) -> dict:
+    """Load a fold payload from an indexed file or accept legacy in-memory data."""
+    if isinstance(source, Path):
+        return torch.load(source, map_location="cpu", weights_only=False, mmap=True)
+    return dict(source)
+
+
 def _train_fold(
     spec: dict,
     fold: dict,
@@ -120,8 +149,15 @@ def _train_fold(
     # edges. Keep the shared source payload immutable across fold jobs.
     selector = ReciprocalAdapter(_config(spec))
     def fold_payload(sample_id):
-        payload = dict(by_id[sample_id])
-        payload["edge_geometry"] = selector._select_geometry(payload["edge_geometry"])
+        payload = _load_fold_payload(by_id[sample_id])
+        full_geometry = payload["edge_geometry"]
+        selected_geometry = selector._select_geometry(full_geometry)
+        # A narrow view keeps the complete G3 mmap alive.  Materialize only
+        # reduced geometries (G0/G1/G2) so a fold does not retain 1049-column
+        # edge tensors after selecting its protocol geometry.
+        if selected_geometry.shape[-1] < full_geometry.shape[-1]:
+            selected_geometry = selected_geometry.contiguous()
+        payload["edge_geometry"] = selected_geometry
         return payload
     train_data = [fold_payload(sample_id) for sample_id in fold["train_sample_ids"]]
     val_data = [fold_payload(sample_id) for sample_id in fold["val_sample_ids"]]
@@ -232,11 +268,10 @@ def _advance_order_rng(order_rng: random.Random, sample_count: int, completed_ep
 
 
 def _init_fold_worker(cache_root: Path) -> None:
-    """Load the memory-mapped development cache once per persistent worker."""
+    """Index the development cache once per persistent worker."""
     global _FOLD_WORKER_BY_ID
     torch.set_num_threads(2)
-    data = _load_cache(Path(cache_root), "train") + _load_cache(Path(cache_root), "val")
-    _FOLD_WORKER_BY_ID = {str(payload["sample_id"]): payload for payload in data}
+    _FOLD_WORKER_BY_ID = _cache_index(Path(cache_root))
 
 
 def _train_fold_worker(job: tuple[dict, dict, argparse.Namespace, Path]) -> dict:
@@ -298,8 +333,7 @@ def run_preflight(args: argparse.Namespace) -> dict:
 def run_search(args: argparse.Namespace) -> dict:
     if "test" in str(args.cache_root).lower() or "test" in str(args.manifests).lower():
         raise ValueError("scientific search refuses test caches/manifests")
-    data = _load_cache(Path(args.cache_root), "train") + _load_cache(Path(args.cache_root), "val")
-    by_id = {str(payload["sample_id"]): payload for payload in data}
+    by_id = _cache_index(Path(args.cache_root))
     folds = build_grouped_folds(Path(args.manifests), 3, int(args.seed))
     expected = set(sample_id for fold in folds for sample_id in fold["train_sample_ids"])
     if set(by_id) != expected:
