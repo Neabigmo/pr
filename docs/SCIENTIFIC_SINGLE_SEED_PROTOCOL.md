@@ -42,6 +42,16 @@ state; `best.pt` contains only the validation-selected model state and its
 selection metadata. Individual epoch weight files are not written, and no
 weights or caches are committed to Git.
 
+The executable entry point is `tools/run_scientific_adapter_pilot.py`:
+
+- `preflight` validates the length-compliant development manifest and grouped
+  folds without reading test data;
+- `search` runs the sequential one-seed development search;
+- `refit` locks the selected development configuration and writes
+  `final_lock.json`;
+- `evaluate --allow-final-holdout` is the only command permitted to read the
+  final test cache.
+
 ## Scientific interpretation
 
 The Adapter track measures a frozen-prior residual correction. The full DM-ICF
