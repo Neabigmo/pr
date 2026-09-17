@@ -23,8 +23,8 @@ The exact exclusions and counts are stored outside Git in
 
 ## Selection
 
-Search is sequential: geometry, direction-specific K, aggregation,
-interaction, then residual. Each candidate uses one seed and the same grouped
+Search is sequential: geometry, direction-specific K, radius (r95/r98/r99),
+aggregation, interaction, then residual. Each candidate uses one seed and the same grouped
 fold assignment. Search first requires improvement relative to both frozen
 priors, selecting the smallest worst-direction ratio. Partner identity is a
 late promotion gate: shortlisted candidates receive 20 composition-preserving

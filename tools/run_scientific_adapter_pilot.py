@@ -55,6 +55,7 @@ from run_adapter_v2_cv import (  # noqa: E402
 DEFAULT_CACHE = Path(r"F:\111临时\PR PILOT\pilot_conditional_adapter_20260916\cache\noise0p0")
 DEFAULT_MANIFESTS = Path(r"F:\111临时\PR PILOT\remote_return_20260911\manifests\round_20260905_exception_v2")
 DEFAULT_OUT = Path(r"I:\PR_PILOT_SCIENTIFIC\20260917\reports")
+RADIUS_OPTIONS = (13.308568573, 14.357456360, 14.979730606)
 
 
 def _seed_everything(seed: int) -> None:
@@ -116,8 +117,9 @@ def _train_fold(
     val_data = [by_id[sample_id] for sample_id in fold["val_sample_ids"]]
     r2p_k = int(spec.get("r2p_k", args.r2p_k))
     p2r_k = int(spec.get("p2r_k", args.p2r_k))
-    _attach_selected_edges(train_data, args.radius, args.neighbors, r2p_k, p2r_k, True)
-    _attach_selected_edges(val_data, args.radius, args.neighbors, r2p_k, p2r_k, True)
+    radius = float(spec.get("radius", args.radius))
+    _attach_selected_edges(train_data, radius, args.neighbors, r2p_k, p2r_k, True)
+    _attach_selected_edges(val_data, radius, args.neighbors, r2p_k, p2r_k, True)
     model = ReciprocalAdapter(_config(spec)).to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.lr), weight_decay=1e-3)
     manager = CheckpointManager(target, "selection_score")
@@ -156,12 +158,12 @@ def _train_fold(
             optimizer.step()
             losses.append(float(loss.detach().cpu()))
         model.eval()
-        validation = evaluate_dataset(model, val_data, args.device, args.radius, args.neighbors, include_permutation=False)
+        validation = evaluate_dataset(model, val_data, args.device, radius, args.neighbors, include_permutation=False)
         scalar = _scalar_metrics(validation)
         scalar["train_loss"] = float(np.mean(losses)) if losses else float("nan")
         scalar["selection_score"] = _score(validation)
         scalar["epoch_seconds"] = time.perf_counter() - started
-        metadata = {"spec": spec, "fold": int(fold["fold"]), "seed": seed, "r2p_k": r2p_k, "p2r_k": p2r_k, "radius": args.radius}
+        metadata = {"spec": spec, "fold": int(fold["fold"]), "seed": seed, "r2p_k": r2p_k, "p2r_k": p2r_k, "radius": radius}
         improved = manager.save_epoch(model, optimizer, None, epoch, scalar, metadata)
         epochs_run = epoch
         if improved:
@@ -178,7 +180,7 @@ def _train_fold(
     best = torch.load(best_path, map_location=args.device, weights_only=False)
     model.load_state_dict(best["model"])
     model.eval()
-    validation = evaluate_dataset(model, val_data, args.device, args.radius, args.neighbors, include_permutation=True)
+    validation = evaluate_dataset(model, val_data, args.device, radius, args.neighbors, include_permutation=True)
     scalar = _scalar_metrics(validation)
     scalar["specificity_mean"] = float(np.nanmean([
         scalar.get("protein_native_minus_permutation_interface_nll", np.nan),
@@ -207,6 +209,8 @@ def _stage_specs(stage: str, base: dict) -> list[dict]:
         return [{**base, "geometry": value} for value in GEOMETRY_MODES]
     if stage == "k":
         return [{**base, "r2p_k": r2p, "p2r_k": p2r} for r2p, p2r in K_CONFIGS]
+    if stage == "radius":
+        return [{**base, "radius": value} for value in RADIUS_OPTIONS]
     if stage == "aggregation":
         return [{**base, "aggregation": value} for value in AGGREGATIONS]
     if stage == "interaction":
@@ -217,7 +221,7 @@ def _stage_specs(stage: str, base: dict) -> list[dict]:
 
 
 def _spec_name(spec: dict) -> str:
-    fields = [spec.get("geometry"), spec.get("r2p_k"), spec.get("p2r_k"), spec.get("aggregation"), spec.get("interaction"), spec.get("residual")]
+    fields = [spec.get("geometry"), spec.get("r2p_k"), spec.get("p2r_k"), spec.get("radius"), spec.get("aggregation"), spec.get("interaction"), spec.get("residual")]
     return "_".join(str(value).replace(".", "p") for value in fields)
 
 
@@ -259,11 +263,11 @@ def run_search(args: argparse.Namespace) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     write_protocol(out / "protocol.json", ScientificProtocol(seed=int(args.seed)), {"test_read": False})
     base = {
-        "geometry": "G2", "r2p_k": int(args.r2p_k), "p2r_k": int(args.p2r_k),
+        "geometry": "G2", "r2p_k": int(args.r2p_k), "p2r_k": int(args.p2r_k), "radius": float(args.radius),
         "aggregation": "A2", "interaction": "concat", "residual": "partner_centered",
         "separate_edge_encoders": False, "modality_projector": True,
     }
-    stage_order = [args.stage] if args.stage != "all" else ["geometry", "k", "aggregation", "interaction", "residual"]
+    stage_order = [args.stage] if args.stage != "all" else ["geometry", "k", "radius", "aggregation", "interaction", "residual"]
     selected = base
     reports = {}
     for stage in stage_order:
@@ -308,7 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight = sub.add_parser("preflight", parents=[common])
     preflight.set_defaults(func=run_preflight)
     search = sub.add_parser("search", parents=[common])
-    search.add_argument("--stage", choices=("all", "geometry", "k", "aggregation", "interaction", "residual"), default="all")
+    search.add_argument("--stage", choices=("all", "geometry", "k", "radius", "aggregation", "interaction", "residual"), default="all")
     search.add_argument("--device", default="cuda:0")
     search.add_argument("--radius", type=float, default=RADIUS)
     search.add_argument("--neighbors", type=int, default=32)

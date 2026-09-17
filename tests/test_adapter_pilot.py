@@ -235,6 +235,21 @@ def test_g3_geometry_is_sequence_neutral_and_has_expected_width():
     assert np.isfinite(value).all()
 
 
+def test_g3_preserves_g2_prefix_for_safe_cache_slicing():
+    p_anchor = np.asarray([[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]], dtype=np.float32)
+    r_anchor = np.asarray([[4.0, 1.0, 2.0], [5.0, 2.0, 1.0], [3.0, 4.0, 2.0]], dtype=np.float32)
+    kwargs = dict(
+        p_anchor=p_anchor, p_valid=np.ones(2, dtype=bool), p_frame=np.eye(3, dtype=np.float32), p_frame_ok=True,
+        r_anchor=r_anchor, r_valid=np.ones(3, dtype=bool), r_frame=np.eye(3, dtype=np.float32), r_frame_ok=True,
+        p_ref=p_anchor[0], r_ref=r_anchor[0], bins=16,
+        p_rich_anchor=np.ones((5, 3), dtype=np.float32), p_rich_valid=np.ones(5, dtype=bool),
+        r_rich_anchor=np.ones((11, 3), dtype=np.float32), r_rich_valid=np.ones(11, dtype=bool),
+    )
+    g2 = _one_feature(mode="G2", **kwargs)
+    g3 = _one_feature(mode="G3", **kwargs)
+    assert np.allclose(g3[: geometry_dimension("G2", 16)], g2)
+
+
 def test_known_partner_mask_blocks_only_unknown_edges():
     model = _v2_model()
     inputs = list(_v2_toy_inputs())
