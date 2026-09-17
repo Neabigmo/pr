@@ -136,6 +136,8 @@ def _train_fold(
     epochs_run = max(0, start_epoch - 1)
     for epoch in range(start_epoch, int(args.epochs) + 1):
         started = time.perf_counter()
+        if args.device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(args.device)
         model.train()
         order = list(range(len(train_data)))
         order_rng.shuffle(order)
@@ -164,6 +166,11 @@ def _train_fold(
         scalar["train_loss"] = float(np.mean(losses)) if losses else float("nan")
         scalar["selection_score"] = _score(validation)
         scalar["epoch_seconds"] = time.perf_counter() - started
+        scalar["train_complexes_per_second"] = len(train_data) / max(scalar["epoch_seconds"], 1e-8)
+        scalar["peak_gpu_memory_mb"] = (
+            float(torch.cuda.max_memory_allocated(args.device) / (1024 ** 2))
+            if args.device.type == "cuda" else 0.0
+        )
         metadata = {"spec": spec, "fold": int(fold["fold"]), "seed": seed, "r2p_k": r2p_k, "p2r_k": p2r_k, "radius": radius}
         improved = manager.save_epoch(model, optimizer, None, epoch, scalar, metadata)
         epochs_run = epoch
@@ -319,6 +326,8 @@ def _train_full(spec: dict, data: list[dict], args: argparse.Namespace, target: 
     history = []
     for epoch in range(1, int(epochs) + 1):
         started = time.perf_counter()
+        if args.device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(args.device)
         model.train()
         order = list(range(len(data)))
         order_rng.shuffle(order)
@@ -341,7 +350,16 @@ def _train_full(spec: dict, data: list[dict], args: argparse.Namespace, target: 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             losses.append(float(loss.detach().cpu()))
-        record = {"train_loss": float(np.mean(losses)), "epoch_seconds": time.perf_counter() - started}
+        epoch_seconds = time.perf_counter() - started
+        record = {
+            "train_loss": float(np.mean(losses)),
+            "epoch_seconds": epoch_seconds,
+            "train_complexes_per_second": len(data) / max(epoch_seconds, 1e-8),
+            "peak_gpu_memory_mb": (
+                float(torch.cuda.max_memory_allocated(args.device) / (1024 ** 2))
+                if args.device.type == "cuda" else 0.0
+            ),
+        }
         history.append(record)
         manager.save_epoch(model, optimizer, None, epoch, record, {"spec": spec, "seed": seed, "refit": True})
     final = manager.save_final(model, int(epochs), history[-1], {"spec": spec, "seed": seed, "refit": True})
