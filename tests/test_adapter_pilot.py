@@ -181,8 +181,8 @@ def test_v2_gate_zero_returns_prior_exactly():
     model = _v2_model(conservative_gate=True)
     inputs = _v2_toy_inputs()
     with torch.no_grad():
-        model.r2p.gate_logit.zero_()
-        model.p2r.gate_logit.zero_()
+        model.r2p.gate_logit.fill_(float("-inf"))
+        model.p2r.gate_logit.fill_(float("-inf"))
     out = model(*inputs)
     assert torch.count_nonzero(out["protein_delta"]) == 0
     assert torch.count_nonzero(out["rna_delta"]) == 0
