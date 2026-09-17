@@ -37,7 +37,7 @@ C0 是旧 attention/residual 路径的匹配基线；为遵守本轮固定邻域
 | C3 | 2/3 | pass | 0.952814 | 0.974760 | -0.115518 | -0.028121 |
 | C4 | 3/3 | pass | 0.956920 | 0.967011 | -0.093956 | -0.033358 |
 
-因此 C4 满足预设 promotion gate，可以进入下一阶段 reciprocal refinement。C4 的平均 learned gate 约为 Protein 0.11、RNA 0.43；其余逐折指标、null weight、delta RMS、距离分层和 prior-confidence 分层见 `results/adapter_v2_20260917/C4/cv_summary.json`。
+因此 C4 满足预设 promotion gate，可以进入下一阶段 reciprocal refinement。C4 的平均 learned gate 约为 Protein 0.108、RNA 0.107；其余逐折指标、null weight、delta RMS、距离分层和 prior-confidence 分层见 `results/adapter_v2_20260917/C4/cv_summary.json`。C4 的平均 null-attention weight 则分别约为 Protein 0.670、RNA 0.431，两者不要混淆。
 
 ## 重要限制
 
