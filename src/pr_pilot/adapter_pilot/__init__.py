@@ -6,11 +6,14 @@ their frozen representations, and trains only a small cross-chain residual.
 """
 
 from .geometry import CrossEdgeSet, build_cross_edges, heavy_contact_audit
+from .joint import AdapterJointModel, AdapterJointPayload
 from .model import ReciprocalAdapter
 
 __all__ = [
     "CrossEdgeSet",
     "ReciprocalAdapter",
+    "AdapterJointModel",
+    "AdapterJointPayload",
     "build_cross_edges",
     "heavy_contact_audit",
 ]
