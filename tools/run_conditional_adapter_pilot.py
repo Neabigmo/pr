@@ -592,7 +592,11 @@ def _load_cache(cache_root: Path, split: str) -> list[dict]:
     files = sorted((cache_root / split).glob("*.pt"))
     if not files:
         raise FileNotFoundError(f"no caches in {cache_root / split}")
-    return [torch.load(path, map_location="cpu", weights_only=False) for path in files]
+    # Keep the large immutable cache backed by the files on I:.  This reduces
+    # private RSS when independent CV folds are run in parallel and lets the
+    # OS share hot pages between workers.  The small per-payload edge-selection
+    # fields are still attached in memory by the runner.
+    return [torch.load(path, map_location="cpu", weights_only=False, mmap=True) for path in files]
 
 
 def _select_edges(payload: dict, radius: float, neighbors: int, target: str = "union") -> torch.Tensor:

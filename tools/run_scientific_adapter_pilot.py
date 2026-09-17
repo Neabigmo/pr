@@ -10,6 +10,7 @@ checkpoint retention.  It never reads a test cache during ``preflight`` or
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import random
 from statistics import median
@@ -134,6 +135,7 @@ def _train_fold(
         best_payload = torch.load(target / "best.pt", map_location="cpu", weights_only=False)
         best_score = float(best_payload["metrics"]["selection_score"])
     epochs_run = max(0, start_epoch - 1)
+    _advance_order_rng(order_rng, len(train_data), epochs_run)
     for epoch in range(start_epoch, int(args.epochs) + 1):
         started = time.perf_counter()
         if args.device.type == "cuda":
@@ -212,6 +214,21 @@ def _train_fold(
     return summary
 
 
+def _advance_order_rng(order_rng: random.Random, sample_count: int, completed_epochs: int) -> None:
+    """Recreate the per-fold shuffle stream before resuming a checkpoint."""
+    scratch = list(range(sample_count))
+    for _ in range(max(0, completed_epochs)):
+        order_rng.shuffle(scratch)
+
+
+def _train_fold_worker(job: tuple[dict, dict, Path, argparse.Namespace, Path]) -> dict:
+    """Load a memory-mapped cache inside a worker and train one independent fold."""
+    spec, fold, cache_root, args, target = job
+    data = _load_cache(Path(cache_root), "train") + _load_cache(Path(cache_root), "val")
+    by_id = {str(payload["sample_id"]): payload for payload in data}
+    return _train_fold(spec, fold, by_id, args, target)
+
+
 def _stage_specs(stage: str, base: dict) -> list[dict]:
     if stage == "geometry":
         return [{**base, "geometry": value} for value in GEOMETRY_MODES]
@@ -286,14 +303,24 @@ def run_search(args: argparse.Namespace) -> dict:
         for spec in specs:
             name = _spec_name(spec)
             fold_summaries = []
+            pending = []
             for fold in folds:
                 target = out / "search" / stage / name / f"fold{fold['fold']}"
                 if (target / "summary.json").exists() and not args.force:
-                    summary = json.loads((target / "summary.json").read_text(encoding="utf-8"))
+                    fold_summaries.append(json.loads((target / "summary.json").read_text(encoding="utf-8")))
                 else:
-                    summary = _train_fold(spec, fold, by_id, args, target)
-                fold_summaries.append(summary)
-                print(json.dumps({"stage": stage, "candidate": name, "fold": fold["fold"], "score": summary["selection_score"]}, ensure_ascii=False), flush=True)
+                    pending.append((spec, fold, Path(args.cache_root), args, target))
+            if int(args.fold_workers) <= 1 or len(pending) <= 1:
+                for job in pending:
+                    summary = _train_fold(job[0], job[1], by_id, args, job[4])
+                    fold_summaries.append(summary)
+            else:
+                with ProcessPoolExecutor(max_workers=int(args.fold_workers)) as executor:
+                    futures = [executor.submit(_train_fold_worker, job) for job in pending]
+                    for future in as_completed(futures):
+                        fold_summaries.append(future.result())
+            for summary in sorted(fold_summaries, key=lambda item: int(item["fold"])):
+                print(json.dumps({"stage": stage, "candidate": name, "fold": summary["fold"], "score": summary["selection_score"]}, ensure_ascii=False), flush=True)
             metrics = {
                 "protein_interface_ratio": float(np.mean([item["validation"]["protein_interface_ratio"] for item in fold_summaries])),
                 "rna_interface_ratio": float(np.mean([item["validation"]["rna_interface_ratio"] for item in fold_summaries])),
@@ -440,6 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--batch-size", type=int, default=16)
     search.add_argument("--resume", action="store_true")
     search.add_argument("--force", action="store_true")
+    search.add_argument("--fold-workers", type=int, default=1)
     search.set_defaults(func=run_search)
     refit = sub.add_parser("refit", parents=[common])
     refit.add_argument("--device", default="cuda:0")
