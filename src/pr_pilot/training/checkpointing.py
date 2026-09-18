@@ -57,9 +57,15 @@ def restore_rng_state(state: dict[str, Any]) -> None:
     """Restore the RNG state saved by :class:`CheckpointManager`."""
     random.setstate(state["python"])
     np.random.set_state(state["numpy"])
-    torch.set_rng_state(state["torch"])
+    torch_state = state["torch"]
+    # ``map_location=cuda`` can move the serialized CPU RNG tensor onto the
+    # selected device even though torch.set_rng_state requires CPU storage.
+    if isinstance(torch_state, torch.Tensor) and torch_state.device.type != "cpu":
+        torch_state = torch_state.cpu()
+    torch.set_rng_state(torch_state)
     if torch.cuda.is_available() and "cuda" in state:
-        torch.cuda.set_rng_state_all(state["cuda"])
+        cuda_states = [value.cpu() if isinstance(value, torch.Tensor) else value for value in state["cuda"]]
+        torch.cuda.set_rng_state_all(cuda_states)
 
 
 @dataclass

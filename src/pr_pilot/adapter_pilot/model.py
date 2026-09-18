@@ -30,6 +30,7 @@ class AdapterConfig:
     modality_projector: bool = False
     conservative_gate: bool = False
     gate_init: float = 0.1
+    rna_gate_mode: str = "baseline"
 
 
 def _mlp(input_dim: int, output_dim: int, layers: int, dropout: float) -> nn.Sequential:
@@ -57,6 +58,8 @@ class _Direction(nn.Module):
         partner_centered_residual: bool = False,
         conservative_gate: bool = False,
         gate_init: float = 0.1,
+        gate_scale: float = 1.0,
+        fixed_gate: float | None = None,
         correct_null_softmax: bool = False,
         interaction: str = "concat",
         residual: str = "direct",
@@ -64,6 +67,10 @@ class _Direction(nn.Module):
         super().__init__()
         if not 0.0 < gate_init < 1.0:
             raise ValueError("gate_init must be strictly between zero and one")
+        if gate_scale < 0.0:
+            raise ValueError("gate_scale must be non-negative")
+        if fixed_gate is not None and not 0.0 <= fixed_gate <= 1.0:
+            raise ValueError("fixed_gate must be between zero and one")
         if aggregation not in {"A0", "A1", "A2"}:
             raise ValueError(f"unknown aggregation {aggregation}")
         if interaction not in {"concat", "centered", "multiplicative", "film"}:
@@ -80,6 +87,8 @@ class _Direction(nn.Module):
         self.residual = str(residual)
         self.correct_null_softmax = bool(correct_null_softmax)
         self.aggregation = aggregation
+        self.gate_scale = float(gate_scale)
+        self.fixed_gate = None if fixed_gate is None else float(fixed_gate)
 
         if self.sequence_independent_attention:
             # u_ij is deliberately token-free. It decides which partner is
@@ -114,7 +123,7 @@ class _Direction(nn.Module):
 
         self.conservative_gate = bool(conservative_gate or residual == "scalar_gate")
         self.position_gate = residual == "confidence_gate"
-        if self.conservative_gate:
+        if self.conservative_gate and self.fixed_gate is None:
             self.gate_logit = nn.Parameter(torch.tensor(math.log(gate_init / (1.0 - gate_init))))
         if self.position_gate:
             self.confidence_gate = nn.Linear(hidden_dim, 1)
@@ -122,13 +131,15 @@ class _Direction(nn.Module):
             nn.init.constant_(self.confidence_gate.bias, math.log(gate_init / (1.0 - gate_init)))
 
     def _gate(self, reference: Tensor, target_h: Tensor | None = None) -> Tensor:
+        if self.fixed_gate is not None:
+            return reference.new_tensor(self.fixed_gate)
         if self.position_gate:
             if target_h is None:
                 raise ValueError("confidence gate requires target hidden states")
-            return torch.sigmoid(self.confidence_gate(target_h).squeeze(-1)).to(dtype=reference.dtype)
+            return (self.gate_scale * torch.sigmoid(self.confidence_gate(target_h).squeeze(-1))).to(dtype=reference.dtype)
         if not self.conservative_gate:
             return reference.new_ones(())
-        return torch.sigmoid(self.gate_logit).to(dtype=reference.dtype)
+        return (self.gate_scale * torch.sigmoid(self.gate_logit)).to(dtype=reference.dtype)
 
     def _aggregate(
         self,
@@ -277,8 +288,20 @@ class ReciprocalAdapter(nn.Module):
             interaction=self.config.interaction,
             residual=residual,
         )
-        self.r2p = _Direction(direction_hidden_dim, self.config.token_dim, self.config.edge_dim, self.config.message_dim, 4, 20, self.config.aggregation, self.config.layers, self.config.dropout, **direction_args)
-        self.p2r = _Direction(direction_hidden_dim, self.config.token_dim, self.config.edge_dim, self.config.message_dim, 20, 4, self.config.aggregation, self.config.layers, self.config.dropout, **direction_args)
+        rna_gate_mode = str(self.config.rna_gate_mode)
+        if rna_gate_mode not in {"baseline", "fixed_quarter", "capped_quarter"}:
+            raise ValueError(f"unknown rna_gate_mode {rna_gate_mode}")
+        rna_gate_scale = 0.25 if rna_gate_mode == "capped_quarter" else 1.0
+        rna_fixed_gate = 0.25 if rna_gate_mode == "fixed_quarter" else None
+        self.r2p = _Direction(
+            direction_hidden_dim, self.config.token_dim, self.config.edge_dim, self.config.message_dim,
+            4, 20, self.config.aggregation, self.config.layers, self.config.dropout, **direction_args,
+        )
+        self.p2r = _Direction(
+            direction_hidden_dim, self.config.token_dim, self.config.edge_dim, self.config.message_dim,
+            20, 4, self.config.aggregation, self.config.layers, self.config.dropout,
+            gate_scale=rna_gate_scale, fixed_gate=rna_fixed_gate, **direction_args,
+        )
 
     def _select_geometry(self, full_geometry: Tensor) -> Tensor:
         bins = self.config.rbf_bins

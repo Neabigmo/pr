@@ -92,6 +92,7 @@ def _config(spec: dict) -> AdapterConfig:
         modality_projector=bool(spec.get("modality_projector", True)),
         conservative_gate=residual == "scalar_gate",
         gate_init=0.1,
+        rna_gate_mode=str(spec.get("rna_gate_mode", "baseline")),
     )
 
 
