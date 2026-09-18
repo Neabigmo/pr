@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from typing import Iterable, Sequence
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -233,10 +234,71 @@ def build_cross_edges(
     adapter = GemmiStructureAdapter(rbf_bins=bins, pr_cutoff_angstrom=radius_angstrom, pr_max_neighbors=max_neighbors)
     p_records = _records(adapter, structure_path, sample_id, "protein", protein_chains)
     r_records = _records(adapter, structure_path, sample_id, "rna", rna_chains)
+    result, _, _ = build_cross_edges_from_records(
+        p_records,
+        r_records,
+        sample_id=sample_id,
+        radius_angstrom=radius_angstrom,
+        max_neighbors=max_neighbors,
+        bins=bins,
+        geometry_mode=geometry_mode,
+        candidate_neighbors=candidate_neighbors,
+        coordinate_noise_angstrom=coordinate_noise_angstrom,
+        noise_seed=noise_seed,
+    )
+    return result, p_records, r_records
+
+
+def _transformed_records(records: Sequence, rotation: np.ndarray | None, translation: np.ndarray | None) -> list:
+    """Return lightweight record views with transformed atom coordinates.
+
+    Geometry is sequence-neutral, so the edge builder only needs the ``atoms``
+    mapping.  Keeping the original parser records as the return value of the
+    public builders preserves the cache/alignment contract.
+    """
+    if rotation is None and translation is None:
+        return list(records)
+    rot = np.asarray(rotation if rotation is not None else np.eye(3), dtype=np.float32)
+    shift = np.asarray(translation if translation is not None else np.zeros(3), dtype=np.float32)
+    transformed = []
+    for record in records:
+        atoms = {
+            name: (rot @ np.asarray(value, dtype=np.float32) + shift).astype(np.float32)
+            if np.isfinite(value).all() else np.asarray(value, dtype=np.float32).copy()
+            for name, value in record.atoms.items()
+        }
+        transformed.append(SimpleNamespace(atoms=atoms))
+    return transformed
+
+
+def build_cross_edges_from_records(
+    p_records: Sequence,
+    r_records: Sequence,
+    sample_id: str = "records",
+    radius_angstrom: float = 8.0,
+    max_neighbors: int = 12,
+    bins: int = 16,
+    geometry_mode: str = "G2",
+    candidate_neighbors: int = 32,
+    coordinate_noise_angstrom: float = 0.0,
+    noise_seed: int = 0,
+    protein_rotation: np.ndarray | None = None,
+    protein_translation: np.ndarray | None = None,
+    rna_rotation: np.ndarray | None = None,
+    rna_translation: np.ndarray | None = None,
+) -> tuple[CrossEdgeSet, list, list]:
+    """Build cross edges from parsed records without rerunning any prior.
+
+    This is used by mechanism perturbations.  ``p_records`` and ``r_records``
+    remain the original alignment records; optional transforms affect only the
+    geometry view.  Frozen prior hidden states/logits are therefore untouched.
+    """
+    p_work = _transformed_records(p_records, protein_rotation, protein_translation)
+    r_work = _transformed_records(r_records, rna_rotation, rna_translation)
     digest = hashlib.sha256(f"{sample_id}|{noise_seed}|{coordinate_noise_angstrom:.6f}".encode()).digest()
     rng = np.random.default_rng(int.from_bytes(digest[:8], "little", signed=False))
-    p_values = [_protein_anchors(record, rng, float(coordinate_noise_angstrom)) for record in p_records]
-    r_values = [_rna_anchors(record, rng, float(coordinate_noise_angstrom)) for record in r_records]
+    p_values = [_protein_anchors(record, rng, float(coordinate_noise_angstrom)) for record in p_work]
+    r_values = [_rna_anchors(record, rng, float(coordinate_noise_angstrom)) for record in r_work]
     candidates: list[tuple[int, int, float]] = []
     pair_features: dict[tuple[int, int], np.ndarray] = {}
     for i, (pa, pm, pf, pf_ok, p_ref, p_rich, p_rich_valid) in enumerate(p_values):
@@ -254,19 +316,19 @@ def build_cross_edges(
                     p_rich, p_rich_valid, r_rich, r_rich_valid,
                 )
     keep: set[tuple[int, int]] = set()
-    for i in range(len(p_records)):
+    for i in range(len(p_work)):
         vals = sorted((item for item in candidates if item[0] == i), key=lambda item: item[2])[:candidate_neighbors]
         keep.update((a, b) for a, b, _ in vals)
-    for j in range(len(r_records)):
+    for j in range(len(r_work)):
         vals = sorted((item for item in candidates if item[1] == j), key=lambda item: item[2])[:candidate_neighbors]
         keep.update((a, b) for a, b, _ in vals)
     # Re-apply the requested K after the cache allowance.  This makes the
     # resulting graph exactly reproducible for each P3 neighborhood setting.
     final: set[tuple[int, int]] = set()
-    for i in range(len(p_records)):
+    for i in range(len(p_work)):
         vals = sorted((item for item in candidates if item[0] == i), key=lambda item: item[2])[:max_neighbors]
         final.update((a, b) for a, b, _ in vals)
-    for j in range(len(r_records)):
+    for j in range(len(r_work)):
         vals = sorted((item for item in candidates if item[1] == j), key=lambda item: item[2])[:max_neighbors]
         final.update((a, b) for a, b, _ in vals)
     ordered = sorted(final)
@@ -286,7 +348,64 @@ def build_cross_edges(
         radius_angstrom=float(radius_angstrom),
         max_neighbors=int(max_neighbors),
     )
-    return result, p_records, r_records
+    return result, list(p_records), list(r_records)
+
+
+def build_pair_geometry_from_records(
+    p_records: Sequence,
+    r_records: Sequence,
+    pairs: Sequence[tuple[int, int]],
+    sample_id: str = "pairs",
+    bins: int = 16,
+    geometry_mode: str = "G2",
+    protein_rotation: np.ndarray | None = None,
+    protein_translation: np.ndarray | None = None,
+    rna_rotation: np.ndarray | None = None,
+    rna_translation: np.ndarray | None = None,
+    coordinate_noise_angstrom: float = 0.0,
+    noise_seed: int = 0,
+) -> CrossEdgeSet:
+    """Compute geometry for an explicit pair list without changing priors.
+
+    Used for degree-preserving rewiring: the graph endpoints are changed first,
+    then geometry is recomputed for exactly those endpoints.
+    """
+    p_work = _transformed_records(p_records, protein_rotation, protein_translation)
+    r_work = _transformed_records(r_records, rna_rotation, rna_translation)
+    digest = hashlib.sha256(f"{sample_id}|{noise_seed}|{coordinate_noise_angstrom:.6f}".encode()).digest()
+    rng = np.random.default_rng(int.from_bytes(digest[:8], "little", signed=False))
+    p_values = [_protein_anchors(record, rng, float(coordinate_noise_angstrom)) for record in p_work]
+    r_values = [_rna_anchors(record, rng, float(coordinate_noise_angstrom)) for record in r_work]
+    ordered = [(int(i), int(j)) for i, j in pairs]
+    features: list[np.ndarray] = []
+    distances: list[float] = []
+    for i, j in ordered:
+        if not (0 <= i < len(p_values) and 0 <= j < len(r_values)):
+            raise ValueError(f"invalid pair for {sample_id}: {(i, j)}")
+        pa, pm, pf, pf_ok, p_ref, p_rich, p_rich_valid = p_values[i]
+        ra, rm, rf, rf_ok, r_ref, r_rich, r_rich_valid = r_values[j]
+        valid = pm[:, None] & rm[None, :]
+        if not valid.any():
+            raise ValueError(f"pair has no valid anchor for {sample_id}: {(i, j)}")
+        distances_matrix = np.linalg.norm(pa[:, None, :] - ra[None, :, :], axis=-1)
+        distances.append(float(distances_matrix[valid].min()))
+        features.append(_one_feature(
+            pa, pm, pf, pf_ok, ra, rm, rf, rf_ok, p_ref, r_ref, bins, geometry_mode,
+            p_rich, p_rich_valid, r_rich, r_rich_valid,
+        ))
+    dims = {mode: geometry_dimension(mode, bins) for mode in ("G0", "G1", "G2", "G3")}
+    array = np.stack(features).astype(np.float32) if features else np.zeros((0, dims[geometry_mode]), dtype=np.float32)
+    if array.shape[1] != dims[geometry_mode]:
+        raise AssertionError(f"pair geometry dimension drift: {array.shape[1]} != {dims[geometry_mode]}")
+    return CrossEdgeSet(
+        protein_index=np.asarray([i for i, _ in ordered], dtype=np.int64),
+        rna_index=np.asarray([j for _, j in ordered], dtype=np.int64),
+        distance=np.asarray(distances, dtype=np.float32),
+        features=array,
+        feature_dim=array.shape[1],
+        radius_angstrom=float("inf"),
+        max_neighbors=len(ordered),
+    )
 
 
 def heavy_contact_audit(p_records: Iterable, r_records: Iterable, thresholds: Sequence[float] = (5.0,)) -> dict:

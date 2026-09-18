@@ -1,0 +1,90 @@
+{
+  "protocol": {
+    "seed": 20260917,
+    "development_folds": [0, 1, 2],
+    "test_read": false,
+    "prior_retrained": false,
+    "adapter_retrained": false,
+    "geometry": "G2",
+    "radius_angstrom": 14.979730606,
+    "r2p_k": 8,
+    "p2r_k": 12,
+    "bootstrap_resamples": 10000,
+    "metric_subset": "interface complex-level paired means"
+  },
+  "fold_rows": {
+    "native": [330, 331, 330],
+    "global_shuffle": [6600, 6620, 6600],
+    "interface_shuffle": [6600, 6620, 6600],
+    "local_swap": [20936, 16446, 22182],
+    "edge_rewiring": [990, 993, 990],
+    "coordinate_noise": [1650, 1655, 1650],
+    "rigid_body": [2640, 2648, 2640],
+    "edge_dropout": [3960, 3972, 3960],
+    "single_site_mutation": [454113, 354336, 492442]
+  },
+  "complexes": 991,
+  "metrics": {
+    "native": {
+      "protein_interface_ratio": {"mean": 0.95991953, "ci95": [0.95819243, 0.96161997]},
+      "rna_interface_ratio": {"mean": 0.99239308, "ci95": [0.98641657, 0.99843270]},
+      "protein_interface_delta_nll": {"mean": 0.0, "ci95": [0.0, 0.0]},
+      "rna_interface_delta_nll": {"mean": 0.0, "ci95": [0.0, 0.0]}
+    },
+    "global_shuffle": {
+      "protein_interface_ratio": {"mean": 0.95973433, "ci95": [0.95798827, 0.96142867]},
+      "rna_interface_ratio": {"mean": 0.99262388, "ci95": [0.98681468, 0.99850342]},
+      "protein_interface_delta_nll": {"mean": -0.00045789, "ci95": [-0.00090366, -0.00000913]},
+      "rna_interface_delta_nll": {"mean": 0.00104757, "ci95": [-0.00017235, 0.00229965]}
+    },
+    "interface_shuffle": {
+      "protein_interface_ratio": {"mean": 0.95982800, "ci95": [0.95809290, 0.96152653]},
+      "rna_interface_ratio": {"mean": 0.99216541, "ci95": [0.98632670, 0.99805091]},
+      "protein_interface_delta_nll": {"mean": -0.00022298, "ci95": [-0.00059649, 0.00015532]},
+      "rna_interface_delta_nll": {"mean": 0.00110042, "ci95": [0.00012247, 0.00213605]}
+    },
+    "local_swap": {
+      "protein_interface_ratio": {"mean": 0.95991167, "ci95": [0.95818432, 0.96160779]},
+      "rna_interface_ratio": {"mean": 0.99238587, "ci95": [0.98641930, 0.99841401]},
+      "protein_interface_delta_nll": {"mean": -0.00001880, "ci95": [-0.00004004, 0.00000251]},
+      "rna_interface_delta_nll": {"mean": 0.00001991, "ci95": [-0.00002405, 0.00006558]}
+    },
+    "edge_rewiring": {
+      "protein_interface_ratio": {"mean": 0.96198932, "ci95": [0.96033768, 0.96358858]},
+      "rna_interface_ratio": {"mean": 0.99275196, "ci95": [0.98680990, 0.99869755]},
+      "protein_interface_delta_nll": {"mean": 0.00530826, "ci95": [0.00466654, 0.00594886]},
+      "rna_interface_delta_nll": {"mean": 0.00096732, "ci95": [-0.00026871, 0.00220461]}
+    },
+    "coordinate_noise": {
+      "protein_interface_ratio": {"mean": 0.96037544, "ci95": [0.95865254, 0.96211238]},
+      "rna_interface_ratio": {"mean": 0.99246854, "ci95": [0.98643285, 0.99847692]},
+      "protein_interface_delta_nll": {"mean": 0.00117584, "ci95": [0.00101675, 0.00133827]},
+      "rna_interface_delta_nll": {"mean": 0.00009030, "ci95": [-0.00000683, 0.00018907]}
+    },
+    "rigid_body": {
+      "protein_interface_ratio": {"mean": 0.96074575, "ci95": [0.95904153, 0.96242346]},
+      "rna_interface_ratio": {"mean": 0.99252133, "ci95": [0.98657480, 0.99866497]},
+      "protein_interface_delta_nll": {"mean": 0.00211161, "ci95": [0.00180974, 0.00241548]},
+      "rna_interface_delta_nll": {"mean": 0.00014890, "ci95": [0.00000329, 0.00029968]}
+    },
+    "edge_dropout": {
+      "protein_interface_ratio": {"mean": 0.96074341, "ci95": [0.95906032, 0.96238759]},
+      "rna_interface_ratio": {"mean": 0.99265850, "ci95": [0.98702185, 0.99841612]},
+      "protein_interface_delta_nll": {"mean": 0.00215535, "ci95": [0.00191965, 0.00239829]},
+      "rna_interface_delta_nll": {"mean": 0.00138835, "ci95": [0.00089007, 0.00188649]}
+    },
+    "single_site_mutation": {
+      "protein_interface_ratio": {"mean": 0.95991852, "ci95": [0.95819112, 0.96161744]},
+      "rna_interface_ratio": {"mean": 0.99235613, "ci95": [0.98639014, 0.99837860]},
+      "protein_interface_delta_nll": {"mean": -0.00000226, "ci95": [-0.00000644, 0.00000207]},
+      "rna_interface_delta_nll": {"mean": -0.00001653, "ci95": [-0.00005151, 0.00001825]}
+    }
+  },
+  "audit": {
+    "basis": "construction_invariant",
+    "composition_preserved": "all except single_site_mutation, where change is intentional",
+    "degree_preserved": "edge_rewiring",
+    "active_mask_preserved": "all eight experiments",
+    "full_detail_report": "external reports/mechanisms_priority8/priority8_summary.json"
+  }
+}

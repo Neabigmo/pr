@@ -147,11 +147,11 @@ def _train_fold(
     _seed_everything(seed)
     # Select the model's feature columns before materializing directional
     # edges. Keep the shared source payload immutable across fold jobs.
-    selector = ReciprocalAdapter(_config(spec))
-    def fold_payload(sample_id):
+    geometry_selector = ReciprocalAdapter(_config(spec))
+    def fold_payload(sample_id, _selector=geometry_selector):
         payload = _load_fold_payload(by_id[sample_id])
         full_geometry = payload["edge_geometry"]
-        selected_geometry = selector._select_geometry(full_geometry)
+        selected_geometry = _selector._select_geometry(full_geometry)
         # A narrow view keeps the complete G3 mmap alive.  Materialize only
         # reduced geometries (G0/G1/G2) so a fold does not retain 1049-column
         # edge tensors after selecting its protocol geometry.
@@ -161,7 +161,7 @@ def _train_fold(
         return payload
     train_data = [fold_payload(sample_id) for sample_id in fold["train_sample_ids"]]
     val_data = [fold_payload(sample_id) for sample_id in fold["val_sample_ids"]]
-    del selector
+    del geometry_selector
     _seed_everything(seed)
     r2p_k = int(spec.get("r2p_k", args.r2p_k))
     p2r_k = int(spec.get("p2r_k", args.p2r_k))
