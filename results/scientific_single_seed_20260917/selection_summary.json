@@ -1,0 +1,69 @@
+{
+  "seed": 20260917,
+  "test_read": false,
+  "selected": {
+    "geometry": "G2",
+    "r2p_k": 8,
+    "p2r_k": 12,
+    "radius": 14.979730606,
+    "aggregation": "A0",
+    "interaction": "multiplicative",
+    "residual": "scalar_gate",
+    "separate_edge_encoders": true,
+    "modality_projector": true
+  },
+  "stages": {
+    "geometry": {
+      "selected": "G2",
+      "protein_interface_ratio": 0.9563087153617008,
+      "rna_interface_ratio": 0.9739342010582613,
+      "specificity_mean": 0.001943309125980212
+    },
+    "k": {
+      "selected": "R->P 8, P->R 12",
+      "protein_interface_ratio": 0.956308715128308,
+      "rna_interface_ratio": 0.9739342021131073,
+      "specificity_mean": 0.0019433057718434843
+    },
+    "radius": {
+      "selected": 14.979730606,
+      "protein_interface_ratio": 0.956333213767267,
+      "rna_interface_ratio": 0.9735507125361358,
+      "specificity_mean": 0.0011889936122382132
+    },
+    "aggregation": {
+      "selected": "A0",
+      "protein_interface_ratio": 0.9513399920442976,
+      "rna_interface_ratio": 0.972093906999454,
+      "specificity_mean": 0.0007451084108178926
+    },
+    "interaction": {
+      "selected": "multiplicative",
+      "protein_interface_ratio": 0.958387929354472,
+      "rna_interface_ratio": 0.9694388534761017,
+      "specificity_mean": -0.0010753788146413146
+    },
+    "residual": {
+      "selected": "scalar_gate",
+      "protein_interface_ratio": 0.9607810208164435,
+      "rna_interface_ratio": 0.9682994520730576,
+      "specificity_mean": -0.00017356587578267377
+    },
+    "edge_encoder": {
+      "selected": "separate directional encoders",
+      "protein_interface_ratio": 0.9594120617092239,
+      "rna_interface_ratio": 0.9680826677237727,
+      "specificity_mean": 0.0002227788700625936
+    }
+  },
+  "audit": {
+    "development_fold_summaries": 75,
+    "all_fold_checkpoints_have_best_and_last": true,
+    "holdout_used": false,
+    "resolution_method_filtering": false,
+    "length_bounds": {
+      "protein": [40, 2000],
+      "rna": [10, 500]
+    }
+  }
+}
