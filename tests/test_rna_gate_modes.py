@@ -38,3 +38,26 @@ def test_capped_rna_gate_never_exceeds_quarter():
     reference = torch.zeros(3, 4)
     gate = model.p2r._gate(reference)
     assert float(gate) <= 0.25 + 1e-6
+
+
+def test_entropy_scaled_rna_gate_removes_scalar_gate_and_uses_prior_entropy():
+    model = ReciprocalAdapter(_config("entropy_scaled"))
+    assert not hasattr(model.p2r, "gate_logit")
+    assert not hasattr(model.p2r, "confidence_gate")
+
+    protein_base = torch.log_softmax(torch.randn(3, 20), dim=-1)
+    rna_base = torch.log_softmax(torch.tensor([[0.0, 0.0, 0.0, 0.0], [8.0, -8.0, -8.0, -8.0]]), dim=-1)
+    p_hidden = torch.randn(3, 128)
+    r_hidden = torch.randn(2, 128)
+    p_tokens = torch.tensor([0, 1, 2])
+    r_tokens = torch.tensor([0, 1])
+    edge_index = torch.tensor([[0, 1], [0, 1]])
+    geometry = torch.randn(2, 114)
+    output = model(
+        protein_base, rna_base, p_hidden, r_hidden, p_tokens, r_tokens,
+        edge_index, geometry, edge_index, geometry,
+    )
+    assert torch.all(output["rna_gate"] >= 0.0)
+    assert torch.all(output["rna_gate"] <= 1.0)
+    assert float(output["rna_gate"][0]) > float(output["rna_gate"][1])
+    assert torch.allclose(output["rna_logits"] - rna_base, output["rna_delta"])

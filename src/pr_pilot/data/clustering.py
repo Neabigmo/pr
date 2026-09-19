@@ -121,8 +121,11 @@ def run_rfam_cmscan(fasta: Path, rfam_cm: Path, clanin: Path, out_dir: Path, cpu
     tbl = out_dir / "rfam.tbl"
     command = [
         cmscan, "--cpu", str(cpu), "--cut_ga", "--rfam", "--nohmmonly",
-        "--clanin", str(clanin), "--oskip", "--fmt", "2",
-        "--tblout", str(tbl), str(rfam_cm), str(fasta),
+        # Infernal 1.1.5 parses --clanin only after the output format has
+        # been selected; keeping --fmt before --clanin is also compatible
+        # with older Infernal builds.
+        "--tblout", str(tbl), "--fmt", "2", "--clanin", str(clanin), "--oskip",
+        str(rfam_cm), str(fasta),
     ]
     _run(command, out_dir / "cmscan.log")
     hits: dict[str, set[str]] = {}
@@ -158,6 +161,7 @@ def annotate_all_candidates(
     rfam_cm_gz: Path,
     rfam_clanin: Path,
     cmscan_cpu: int = 4,
+    rfam_query_sample_ids: set[str] | None = None,
 ) -> tuple[Path, Path, Path]:
     """Jointly annotate all candidate tables and return annotated TSV paths."""
     p_single = pd.read_csv(protein_eligible, sep="\t")
@@ -209,7 +213,19 @@ def annotate_all_candidates(
     }
 
     rfam_cm = prepare_rfam_database(rfam_cm_gz, out_dir / "rfam_db")
-    rfam_hits = run_rfam_cmscan(rna_fasta, rfam_cm, rfam_clanin, out_dir / "rfam_scan", cpu=cmscan_cpu)
+    rfam_query = rna_fasta
+    if rfam_query_sample_ids is not None:
+        # Existing development/holdout rows already carry frozen Rfam labels;
+        # only newly screened candidates need a fresh family scan.  MMseqs
+        # still sees the complete joint sequence space for P30/R80 auditing.
+        selected = {
+            key: sequence
+            for key, sequence in rna_sequences.items()
+            if any(str(sample_id) in key for sample_id in rfam_query_sample_ids)
+        }
+        rfam_query = out_dir / "rfam_query_sequences.fa"
+        _write_fasta(selected, rfam_query)
+    rfam_hits = run_rfam_cmscan(rfam_query, rfam_cm, rfam_clanin, out_dir / "rfam_scan", cpu=cmscan_cpu)
 
     for col, mapping in p_maps.items():
         p_single[col] = p_single["sample_id"].astype(str).map(lambda sid: mapping[p_single_key[sid]])
