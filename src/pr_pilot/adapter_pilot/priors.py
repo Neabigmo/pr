@@ -140,6 +140,25 @@ def _protein_encoded(model, tensors):
     return h_V, model.W_out(h_V), tensors
 
 
+def _protein_structure_encoded(model, tensors):
+    """Return the ProteinMPNN encoder output before any decoder layer.
+
+    This is the representation allowed to enter the explicit interaction
+    generator.  It depends on backbone coordinates, residue indices, and chain
+    encoding, but never on native sequence tokens or teacher-forced decoder
+    states.
+    """
+    X, _S, mask, _lengths, _chain_M, chain_encoding, *_ = tensors
+    E, E_idx = model.features(X, mask, tensors[12], chain_encoding)
+    h_V = torch.zeros((E.shape[0], E.shape[1], E.shape[-1]), device=E.device)
+    h_E = model.W_e(E)
+    mask_attend = model._pilot_gather_nodes(mask.unsqueeze(-1), E_idx).squeeze(-1)
+    mask_attend = mask.unsqueeze(-1) * mask_attend
+    for layer in model.encoder_layers:
+        h_V, h_E = layer(h_V, h_E, E_idx, mask, mask_attend)
+    return h_V, tensors
+
+
 class ProteinMPNNPrior:
     """Official ProteinMPNN with its parameters frozen and untouched."""
 
@@ -187,6 +206,14 @@ class ProteinMPNNPrior:
             "sequence": sequence,
             "length": int(valid.sum().item()),
         }
+
+    @torch.no_grad()
+    def encode_structure_only(self, pdb: Path, chains: Sequence[str]) -> dict[str, torch.Tensor | list[str]]:
+        """Encode only the sequence-free ProteinMPNN encoder representation."""
+        _entry, tensors = _protein_features(self.module, pdb, chains, self.device)
+        h_v, tensors = _protein_structure_encoded(self.model, tensors)
+        valid = tensors[2].squeeze(0).bool()
+        return {"hidden": h_v.squeeze(0)[valid], "length": int(valid.sum().item())}
 
     @torch.no_grad()
     def forward_prior(self, pdb: Path, chains: Sequence[str]) -> torch.Tensor:
