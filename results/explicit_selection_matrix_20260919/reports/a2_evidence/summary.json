@@ -1,0 +1,258 @@
+{
+  "protocol": "A2 inference-only evidence; development validation folds only",
+  "test_read": false,
+  "native_complexes": 860,
+  "experiments": {
+    "edge_dropout|probability=0.1": {
+      "rows": 2580,
+      "complexes": 860,
+      "protein_interface_delta_nll": 0.0007118914247483231,
+      "rna_interface_delta_nll": -8.500274992731377e-07,
+      "protein_interface_ratio": 0.9719978109980346,
+      "rna_interface_ratio": 0.9808404094692506,
+      "protein_interface_kl_to_native": 0.0005074755292899878,
+      "rna_interface_kl_to_native": 0.00014230996418370935,
+      "protein_delta_ci95": [
+        0.0005144390273232773,
+        0.0009119063719760554
+      ],
+      "rna_delta_ci95": [
+        -0.0001840461787673838,
+        0.0001889530040843533
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.5872093023255814,
+        "rna": 0.49534883720930234
+      },
+      "composition": "preserved",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "edge_dropout|probability=0.2": {
+      "rows": 2580,
+      "complexes": 860,
+      "protein_interface_delta_nll": 0.0011056346255679532,
+      "rna_interface_delta_nll": 0.00033104262321956464,
+      "protein_interface_ratio": 0.9721493771489393,
+      "rna_interface_ratio": 0.9811490578423704,
+      "protein_interface_kl_to_native": 0.0012135375050973236,
+      "rna_interface_kl_to_native": 0.00035946358763597295,
+      "protein_delta_ci95": [
+        0.0008326110630765485,
+        0.0013845290272503966
+      ],
+      "rna_delta_ci95": [
+        5.271480202155146e-05,
+        0.0006091795614090325
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.6034883720930233,
+        "rna": 0.5313953488372093
+      },
+      "composition": "preserved",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "edge_dropout|probability=0.4": {
+      "rows": 2580,
+      "complexes": 860,
+      "protein_interface_delta_nll": 0.0028262028398439794,
+      "rna_interface_delta_nll": 0.0010245065009871189,
+      "protein_interface_ratio": 0.9728100083625236,
+      "rna_interface_ratio": 0.9819428878292129,
+      "protein_interface_kl_to_native": 0.0029311293093768685,
+      "rna_interface_kl_to_native": 0.0009641313685494791,
+      "protein_delta_ci95": [
+        0.0023628824348597478,
+        0.0033157758761283803
+      ],
+      "rna_delta_ci95": [
+        0.0005810297635752093,
+        0.0014784563082999493
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.6511627906976745,
+        "rna": 0.5790697674418605
+      },
+      "composition": "preserved",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "edge_dropout|probability=0.6": {
+      "rows": 2580,
+      "complexes": 860,
+      "protein_interface_delta_nll": 0.004434065486109536,
+      "rna_interface_delta_nll": 0.0017784321117539751,
+      "protein_interface_ratio": 0.9734503762148076,
+      "rna_interface_ratio": 0.9823981139539063,
+      "protein_interface_kl_to_native": 0.005293074707597104,
+      "rna_interface_kl_to_native": 0.0021043365300660605,
+      "protein_delta_ci95": [
+        0.0036286703214164846,
+        0.005250213178553328
+      ],
+      "rna_delta_ci95": [
+        0.0010617332891091802,
+        0.0025057935059908045
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.6651162790697674,
+        "rna": 0.5709302325581396
+      },
+      "composition": "preserved",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "global_shuffle": {
+      "rows": 17200,
+      "complexes": 860,
+      "protein_interface_delta_nll": 0.002808862903783492,
+      "rna_interface_delta_nll": 0.0009728877168408645,
+      "protein_interface_ratio": 0.9727936450721909,
+      "rna_interface_ratio": 0.981879419770798,
+      "protein_interface_kl_to_native": 0.004441529770007295,
+      "rna_interface_kl_to_native": 0.002724969102604159,
+      "protein_delta_ci95": [
+        0.0017369626937217568,
+        0.00389539999757396
+      ],
+      "rna_delta_ci95": [
+        -0.0003673891700197805,
+        0.002262604749501617
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.5732558139534883,
+        "rna": 0.5372093023255814
+      },
+      "composition": "preserved",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "interface_shuffle": {
+      "rows": 17200,
+      "complexes": 860,
+      "protein_interface_delta_nll": 0.001160115634286124,
+      "rna_interface_delta_nll": 0.0006552893668413163,
+      "protein_interface_ratio": 0.9721610796828412,
+      "rna_interface_ratio": 0.9813755943717098,
+      "protein_interface_kl_to_native": 0.003560332223710722,
+      "rna_interface_kl_to_native": 0.0015605407841400728,
+      "protein_delta_ci95": [
+        0.0004673416917753777,
+        0.0018694475837225106
+      ],
+      "rna_delta_ci95": [
+        -0.00011924363569854678,
+        0.0014331046113267886
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.5581395348837209,
+        "rna": 0.5627906976744186
+      },
+      "composition": "preserved",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "local_swap|partner_polymer=protein": {
+      "rows": 32901,
+      "complexes": 860,
+      "protein_interface_delta_nll": -1.8546502305503814e-09,
+      "rna_interface_delta_nll": 3.4381596459165046e-05,
+      "protein_interface_ratio": 0.9717059525993976,
+      "rna_interface_ratio": 0.9808672082930829,
+      "protein_interface_kl_to_native": -5.1301459536834914e-11,
+      "rna_interface_kl_to_native": 2.5809217974474326e-05,
+      "protein_delta_ci95": [
+        -4.4365779767663575e-09,
+        5.373889790267027e-10
+      ],
+      "rna_delta_ci95": [
+        -7.4875255411779185e-06,
+        7.37671982215111e-05
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.03604651162790698,
+        "rna": 0.5244186046511627
+      },
+      "composition": "preserved",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "local_swap|partner_polymer=rna": {
+      "rows": 16531,
+      "complexes": 860,
+      "protein_interface_delta_nll": -0.00012972925622892786,
+      "rna_interface_delta_nll": -3.5747599702724875e-10,
+      "protein_interface_ratio": 0.9716576533061616,
+      "rna_interface_ratio": 0.980802254199445,
+      "protein_interface_kl_to_native": 0.00023172803815587202,
+      "rna_interface_kl_to_native": 1.5066460273296588e-10,
+      "protein_delta_ci95": [
+        -0.00023484074165405834,
+        -3.147456048041922e-05
+      ],
+      "rna_delta_ci95": [
+        -1.618492275306501e-09,
+        9.222854746445077e-10
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.5232558139534884,
+        "rna": 0.03837209302325582
+      },
+      "composition": "preserved",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "single_site_mutation|partner_polymer=protein": {
+      "rows": 1018001,
+      "complexes": 860,
+      "protein_interface_delta_nll": -6.918229043903167e-10,
+      "rna_interface_delta_nll": 4.262278233738382e-05,
+      "protein_interface_ratio": 0.9717059530662556,
+      "rna_interface_ratio": 0.980882524210625,
+      "protein_interface_kl_to_native": -7.027158681473539e-11,
+      "rna_interface_kl_to_native": 6.165065853869776e-05,
+      "protein_delta_ci95": [
+        -2.903275173849951e-09,
+        1.4220534939653485e-09
+      ],
+      "rna_delta_ci95": [
+        -2.1423263898861232e-06,
+        8.777564312839243e-05
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.04186046511627907,
+        "rna": 0.6069767441860465
+      },
+      "composition": "changed_by_design",
+      "active_mask": "preserved",
+      "test_read": false
+    },
+    "single_site_mutation|partner_polymer=rna": {
+      "rows": 58371,
+      "complexes": 860,
+      "protein_interface_delta_nll": 0.00034855429540436714,
+      "rna_interface_delta_nll": -5.420270111136467e-10,
+      "protein_interface_ratio": 0.9718484391613157,
+      "rna_interface_ratio": 0.9808022541830016,
+      "protein_interface_kl_to_native": 0.0005634712662149793,
+      "rna_interface_kl_to_native": 2.424804664761446e-10,
+      "protein_delta_ci95": [
+        0.0001550601657747046,
+        0.0005390368773362397
+      ],
+      "rna_delta_ci95": [
+        -1.8335837921508639e-09,
+        7.688606399177683e-10
+      ],
+      "native_better_than_perturbed": {
+        "protein": 0.5802325581395349,
+        "rna": 0.06046511627906977
+      },
+      "composition": "changed_by_design",
+      "active_mask": "preserved",
+      "test_read": false
+    }
+  },
+  "bootstrap_repeats": 10000
+}

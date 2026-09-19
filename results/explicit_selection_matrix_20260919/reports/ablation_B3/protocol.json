@@ -1,0 +1,28 @@
+{
+  "name": "explicit_dynamic_selection_matrix",
+  "seed": 20260919,
+  "development_complexes": 860,
+  "folds": 3,
+  "variants": [
+    "B3"
+  ],
+  "A0": "locked E0 multiplicative + separate directional edge encoders + modality projectors + learned scalar gates",
+  "A1": "M_ij=C, zero-initialized global 20x4 matrix + learned scalar gates",
+  "A2": "M_ij=C+DeltaC_ij, shared G2 edge encoder and 192-128-80 MLP; output zero initialized",
+  "B1": "M_ij=DeltaC_ij; global C removed, otherwise A2",
+  "B2": "M_ij=C+DeltaC_ij; structural hidden removed, G2 edge-only dynamic input",
+  "B3": "M_ij=C+DeltaC_ij; G2 replaced by G0 distance/RBF geometry",
+  "hidden_contract": "sequence_free_encoder_side; no decoder or teacher-forced target hidden",
+  "geometry": "G2",
+  "radius": 14.979730606,
+  "r2p_k": 8,
+  "p2r_k": 12,
+  "geometry_by_variant": {
+    "B3": "G0"
+  },
+  "loss": "0.5*(LP/LPprior + LR/LRprior)",
+  "selection": "RNA equal-weight Q1-Q4 ratio; hard RP<1 and native<20-shuffle in both directions",
+  "shuffle": "20 fixed composition-preserving global permutations; target labels/masks/geometry/edges fixed",
+  "test_read": false,
+  "old_215_status": "diagnostic_only_never_used_for_selection"
+}

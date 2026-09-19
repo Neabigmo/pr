@@ -1,0 +1,871 @@
+{
+  "protocol": {
+    "test_read": true,
+    "blind_complexes": 6,
+    "prior_retrained": false,
+    "adapter_variant": "A2",
+    "adapter_refit": true,
+    "single_seed": 20260919,
+    "conditions": "P0 frozen priors; P1 native A2; P2 token-off; P3 20 composition-preserving partner shuffles",
+    "shuffle_repeats": 20,
+    "bootstrap_repeats": 10000,
+    "manifest": "I:\\PR_PILOT_SCIENTIFIC\\20260919\\blind_new_a2\\manifest\\complex_test.tsv",
+    "manifest_sha256": "08DB8BC59D70DB13935C49927FFFF5AB74CF5DAE2431DA751B58113AEACE8BF4",
+    "checkpoint": "I:\\PR_PILOT_SCIENTIFIC\\20260919\\reports\\explicit_selection_matrix\\A2_refit_blind\\final.pt"
+  },
+  "spec": {
+    "variant": "A2",
+    "geometry": "G2",
+    "radius": 14.979730606,
+    "r2p_k": 8,
+    "p2r_k": 12,
+    "aggregation": "mean",
+    "interaction": "explicit_selection_matrix_C_plus_delta",
+    "separate_edge_encoder": false,
+    "projector": true,
+    "seed": 20260919,
+    "epochs": 4,
+    "batch_size": 16,
+    "lr": 0.0003,
+    "weight_decay": 0.001,
+    "test_read": false,
+    "model_config": {
+      "variant": "A2",
+      "geometry": "G2",
+      "hidden_dim": 128,
+      "projection_dim": 64,
+      "edge_dim": 64,
+      "mlp_hidden_dim": 128,
+      "dropout": 0.1,
+      "rbf_bins": 16,
+      "gate_init": 0.1
+    }
+  },
+  "conditions": {
+    "P1_native": {
+      "condition": "P1_native",
+      "protein_all": {
+        "n_complexes": 6,
+        "adapter_nll": 2.1393083135286965,
+        "prior_nll": 2.1419262091318765,
+        "ratio_of_means": 0.9987777844110508,
+        "mean_of_per_complex_ratios": 1.0001423251825574,
+        "delta_prior_minus_adapter": 0.0026178956031799316,
+        "adapter_recovery": 0.328691599269708,
+        "prior_recovery": 0.3317665383219719,
+        "delta_recovery_adapter_minus_prior": -0.0030749390522638955,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9987777844110508,
+          "ratio_ci95": [
+            0.9879799812416356,
+            1.0149319764181057
+          ],
+          "delta_prior_minus_adapter": 0.0026178956031799316,
+          "delta_ci95": [
+            -0.02993478377660108,
+            0.027359644571939956
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "protein_active": {
+        "n_complexes": 6,
+        "adapter_nll": 2.1705480813980103,
+        "prior_nll": 2.191369652748108,
+        "ratio_of_means": 0.9904983756054182,
+        "mean_of_per_complex_ratios": 0.9926659056649149,
+        "delta_prior_minus_adapter": 0.020821571350097656,
+        "adapter_recovery": 0.32592447598775226,
+        "prior_recovery": 0.32597630470991135,
+        "delta_recovery_adapter_minus_prior": -5.182872215906779e-05,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9904983756054182,
+          "ratio_ci95": [
+            0.967437358468886,
+            1.0183289537909808
+          ],
+          "delta_prior_minus_adapter": 0.020821571350097656,
+          "delta_ci95": [
+            -0.036861419677734375,
+            0.07461539904276515
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "protein_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 2.4016077518463135,
+        "prior_nll": 2.465705712636312,
+        "ratio_of_means": 0.9740042128865957,
+        "mean_of_per_complex_ratios": 0.9767214602324126,
+        "delta_prior_minus_adapter": 0.06409796078999837,
+        "adapter_recovery": 0.26652048031489056,
+        "prior_recovery": 0.2594469338655472,
+        "delta_recovery_adapter_minus_prior": 0.007073546449343364,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9740042128865957,
+          "ratio_ci95": [
+            0.9446263625955938,
+            1.012528380489172
+          ],
+          "delta_prior_minus_adapter": 0.06409796078999852,
+          "delta_ci95": [
+            -0.029481172561645508,
+            0.14166204134623195
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "rna_all": {
+        "n_complexes": 6,
+        "adapter_nll": 1.637696276108424,
+        "prior_nll": 1.7151094774405162,
+        "ratio_of_means": 0.9548639883632285,
+        "mean_of_per_complex_ratios": 0.9619365709398054,
+        "delta_prior_minus_adapter": 0.07741320133209229,
+        "adapter_recovery": 0.28598588208357495,
+        "prior_recovery": 0.2617853408058484,
+        "delta_recovery_adapter_minus_prior": 0.02420054127772649,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9548639883632285,
+          "ratio_ci95": [
+            0.9181258546892762,
+            0.9853079436682091
+          ],
+          "delta_prior_minus_adapter": 0.07741320133209229,
+          "delta_ci95": [
+            0.0203897158304851,
+            0.15385137001673366
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "rna_active": {
+        "n_complexes": 6,
+        "adapter_nll": 1.6690505743026733,
+        "prior_nll": 1.7525282601515453,
+        "ratio_of_means": 0.9523672811748819,
+        "mean_of_per_complex_ratios": 0.9598954971307553,
+        "delta_prior_minus_adapter": 0.08347768584887187,
+        "adapter_recovery": 0.2817465662956238,
+        "prior_recovery": 0.2554330925146739,
+        "delta_recovery_adapter_minus_prior": 0.02631347378094991,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9523672811748819,
+          "ratio_ci95": [
+            0.9179923076773636,
+            0.9813124250807698
+          ],
+          "delta_prior_minus_adapter": 0.08347768584887194,
+          "delta_ci95": [
+            0.026867737372716194,
+            0.1585345367590585
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 1.7321041226387024,
+        "prior_nll": 1.8231861889362335,
+        "ratio_of_means": 0.9500423671206755,
+        "mean_of_per_complex_ratios": 0.9522869303420549,
+        "delta_prior_minus_adapter": 0.09108206629753113,
+        "adapter_recovery": 0.2606542805830638,
+        "prior_recovery": 0.24119630952676138,
+        "delta_recovery_adapter_minus_prior": 0.019457971056302387,
+        "adapter_better_fraction": 1.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9500423671206755,
+          "ratio_ci95": [
+            0.9167277031219462,
+            0.9741268633363561
+          ],
+          "delta_prior_minus_adapter": 0.09108206629753113,
+          "delta_ci95": [
+            0.043156206607818604,
+            0.15943489472071337
+          ],
+          "adapter_better_fraction": 1.0
+        }
+      }
+    },
+    "P2_token_off": {
+      "condition": "P2_token_off",
+      "protein_all": {
+        "n_complexes": 6,
+        "adapter_nll": 2.1419262091318765,
+        "prior_nll": 2.1419262091318765,
+        "ratio_of_means": 1.0,
+        "mean_of_per_complex_ratios": 1.0,
+        "delta_prior_minus_adapter": 0.0,
+        "adapter_recovery": 0.3317665383219719,
+        "prior_recovery": 0.3317665383219719,
+        "delta_recovery_adapter_minus_prior": 0.0,
+        "adapter_better_fraction": 0.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 1.0,
+          "ratio_ci95": [
+            1.0,
+            1.0
+          ],
+          "delta_prior_minus_adapter": 0.0,
+          "delta_ci95": [
+            0.0,
+            0.0
+          ],
+          "adapter_better_fraction": 0.0
+        }
+      },
+      "protein_active": {
+        "n_complexes": 6,
+        "adapter_nll": 2.191369652748108,
+        "prior_nll": 2.191369652748108,
+        "ratio_of_means": 1.0,
+        "mean_of_per_complex_ratios": 1.0,
+        "delta_prior_minus_adapter": 0.0,
+        "adapter_recovery": 0.32597630470991135,
+        "prior_recovery": 0.32597630470991135,
+        "delta_recovery_adapter_minus_prior": 0.0,
+        "adapter_better_fraction": 0.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 1.0,
+          "ratio_ci95": [
+            1.0,
+            1.0
+          ],
+          "delta_prior_minus_adapter": 0.0,
+          "delta_ci95": [
+            0.0,
+            0.0
+          ],
+          "adapter_better_fraction": 0.0
+        }
+      },
+      "protein_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 2.465705712636312,
+        "prior_nll": 2.465705712636312,
+        "ratio_of_means": 1.0,
+        "mean_of_per_complex_ratios": 1.0,
+        "delta_prior_minus_adapter": 0.0,
+        "adapter_recovery": 0.2594469338655472,
+        "prior_recovery": 0.2594469338655472,
+        "delta_recovery_adapter_minus_prior": 0.0,
+        "adapter_better_fraction": 0.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 1.0,
+          "ratio_ci95": [
+            1.0,
+            1.0
+          ],
+          "delta_prior_minus_adapter": 0.0,
+          "delta_ci95": [
+            0.0,
+            0.0
+          ],
+          "adapter_better_fraction": 0.0
+        }
+      },
+      "rna_all": {
+        "n_complexes": 6,
+        "adapter_nll": 1.7151094774405162,
+        "prior_nll": 1.7151094774405162,
+        "ratio_of_means": 1.0,
+        "mean_of_per_complex_ratios": 1.0,
+        "delta_prior_minus_adapter": 0.0,
+        "adapter_recovery": 0.2617853408058484,
+        "prior_recovery": 0.2617853408058484,
+        "delta_recovery_adapter_minus_prior": 0.0,
+        "adapter_better_fraction": 0.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 1.0,
+          "ratio_ci95": [
+            1.0,
+            1.0
+          ],
+          "delta_prior_minus_adapter": 0.0,
+          "delta_ci95": [
+            0.0,
+            0.0
+          ],
+          "adapter_better_fraction": 0.0
+        }
+      },
+      "rna_active": {
+        "n_complexes": 6,
+        "adapter_nll": 1.7525282601515453,
+        "prior_nll": 1.7525282601515453,
+        "ratio_of_means": 1.0,
+        "mean_of_per_complex_ratios": 1.0,
+        "delta_prior_minus_adapter": 0.0,
+        "adapter_recovery": 0.2554330925146739,
+        "prior_recovery": 0.2554330925146739,
+        "delta_recovery_adapter_minus_prior": 0.0,
+        "adapter_better_fraction": 0.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 1.0,
+          "ratio_ci95": [
+            1.0,
+            1.0
+          ],
+          "delta_prior_minus_adapter": 0.0,
+          "delta_ci95": [
+            0.0,
+            0.0
+          ],
+          "adapter_better_fraction": 0.0
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 1.8231861889362335,
+        "prior_nll": 1.8231861889362335,
+        "ratio_of_means": 1.0,
+        "mean_of_per_complex_ratios": 1.0,
+        "delta_prior_minus_adapter": 0.0,
+        "adapter_recovery": 0.24119630952676138,
+        "prior_recovery": 0.24119630952676138,
+        "delta_recovery_adapter_minus_prior": 0.0,
+        "adapter_better_fraction": 0.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 1.0,
+          "ratio_ci95": [
+            1.0,
+            1.0
+          ],
+          "delta_prior_minus_adapter": 0.0,
+          "delta_ci95": [
+            0.0,
+            0.0
+          ],
+          "adapter_better_fraction": 0.0
+        }
+      }
+    },
+    "P3_partner_shuffle": {
+      "condition": "P3_partner_shuffle",
+      "protein_all": {
+        "n_complexes": 6,
+        "adapter_nll": 2.1373496890068053,
+        "prior_nll": 2.1419262091318765,
+        "ratio_of_means": 0.9978633623765564,
+        "mean_of_per_complex_ratios": 0.9993224759430396,
+        "delta_prior_minus_adapter": 0.004576520125071222,
+        "adapter_recovery": 0.32996429192523163,
+        "prior_recovery": 0.3317665383219719,
+        "delta_recovery_adapter_minus_prior": -0.0018022463967402823,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9978633623765564,
+          "ratio_ci95": [
+            0.9870525934437387,
+            1.0142436221042632
+          ],
+          "delta_prior_minus_adapter": 0.0045765201250711485,
+          "delta_ci95": [
+            -0.0282670438289645,
+            0.029901943604151437
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "protein_active": {
+        "n_complexes": 6,
+        "adapter_nll": 2.1668366114298503,
+        "prior_nll": 2.191369652748108,
+        "ratio_of_means": 0.9888046997057335,
+        "mean_of_per_complex_ratios": 0.9912870506852851,
+        "delta_prior_minus_adapter": 0.02453304131825766,
+        "adapter_recovery": 0.32798988856375216,
+        "prior_recovery": 0.32597630470991135,
+        "delta_recovery_adapter_minus_prior": 0.002013583853840826,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9888046997057335,
+          "ratio_ci95": [
+            0.9659844582738176,
+            1.0174389864731574
+          ],
+          "delta_prior_minus_adapter": 0.02453304131825762,
+          "delta_ci95": [
+            -0.035071603457133005,
+            0.08012375831604013
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "protein_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 2.3999837418397267,
+        "prior_nll": 2.465705712636312,
+        "ratio_of_means": 0.9733455738615636,
+        "mean_of_per_complex_ratios": 0.9761158541883086,
+        "delta_prior_minus_adapter": 0.06572197079658511,
+        "adapter_recovery": 0.2714863995711009,
+        "prior_recovery": 0.2594469338655472,
+        "delta_recovery_adapter_minus_prior": 0.01203946570555369,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9733455738615636,
+          "ratio_ci95": [
+            0.9434875416389944,
+            1.0133654566952734
+          ],
+          "delta_prior_minus_adapter": 0.06572197079658526,
+          "delta_ci95": [
+            -0.030758690834045588,
+            0.14427408973375933
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "rna_all": {
+        "n_complexes": 6,
+        "adapter_nll": 1.6159894173343974,
+        "prior_nll": 1.7151094774405162,
+        "ratio_of_means": 0.9422077357685428,
+        "mean_of_per_complex_ratios": 0.9505104736682947,
+        "delta_prior_minus_adapter": 0.09912006010611853,
+        "adapter_recovery": 0.2871421760258575,
+        "prior_recovery": 0.2617853408058484,
+        "delta_recovery_adapter_minus_prior": 0.025356835220009092,
+        "adapter_better_fraction": 1.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9422077357685428,
+          "ratio_ci95": [
+            0.89084286689993,
+            0.9810502834479354
+          ],
+          "delta_prior_minus_adapter": 0.09912006010611885,
+          "delta_ci95": [
+            0.026983404656251153,
+            0.20509525289138164
+          ],
+          "adapter_better_fraction": 1.0
+        }
+      },
+      "rna_active": {
+        "n_complexes": 6,
+        "adapter_nll": 1.6431629369656244,
+        "prior_nll": 1.7525282601515453,
+        "ratio_of_means": 0.9375956863734318,
+        "mean_of_per_complex_ratios": 0.9459536934350888,
+        "delta_prior_minus_adapter": 0.10936532318592074,
+        "adapter_recovery": 0.284577657127132,
+        "prior_recovery": 0.2554330925146739,
+        "delta_recovery_adapter_minus_prior": 0.029144564612458155,
+        "adapter_better_fraction": 1.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9375956863734318,
+          "ratio_ci95": [
+            0.8890380702453025,
+            0.9754246038328417
+          ],
+          "delta_prior_minus_adapter": 0.10936532318592085,
+          "delta_ci95": [
+            0.0345791935920714,
+            0.21442570586999277
+          ],
+          "adapter_better_fraction": 1.0
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 1.7009999608000121,
+        "prior_nll": 1.8231861889362335,
+        "ratio_of_means": 0.9329820350342206,
+        "mean_of_per_complex_ratios": 0.935406964384541,
+        "delta_prior_minus_adapter": 0.12218622813622156,
+        "adapter_recovery": 0.2754606590606272,
+        "prior_recovery": 0.24119630952676138,
+        "delta_recovery_adapter_minus_prior": 0.03426434953386585,
+        "adapter_better_fraction": 1.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9329820350342206,
+          "ratio_ci95": [
+            0.8870271338274351,
+            0.9663791887182579
+          ],
+          "delta_prior_minus_adapter": 0.12218622813622138,
+          "delta_ci95": [
+            0.05657574484745642,
+            0.21442570586999277
+          ],
+          "adapter_better_fraction": 1.0
+        }
+      }
+    }
+  },
+  "comparisons": {
+    "P1_native": {
+      "protein_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 2.4016077518463135,
+        "prior_nll": 2.465705712636312,
+        "ratio_of_means": 0.9740042128865957,
+        "mean_of_per_complex_ratios": 0.9767214602324126,
+        "delta_prior_minus_adapter": 0.06409796078999837,
+        "adapter_recovery": 0.26652048031489056,
+        "prior_recovery": 0.2594469338655472,
+        "delta_recovery_adapter_minus_prior": 0.007073546449343364,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9740042128865957,
+          "ratio_ci95": [
+            0.9446263625955938,
+            1.012528380489172
+          ],
+          "delta_prior_minus_adapter": 0.06409796078999852,
+          "delta_ci95": [
+            -0.029481172561645508,
+            0.14166204134623195
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 1.7321041226387024,
+        "prior_nll": 1.8231861889362335,
+        "ratio_of_means": 0.9500423671206755,
+        "mean_of_per_complex_ratios": 0.9522869303420549,
+        "delta_prior_minus_adapter": 0.09108206629753113,
+        "adapter_recovery": 0.2606542805830638,
+        "prior_recovery": 0.24119630952676138,
+        "delta_recovery_adapter_minus_prior": 0.019457971056302387,
+        "adapter_better_fraction": 1.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9500423671206755,
+          "ratio_ci95": [
+            0.9167277031219462,
+            0.9741268633363561
+          ],
+          "delta_prior_minus_adapter": 0.09108206629753113,
+          "delta_ci95": [
+            0.043156206607818604,
+            0.15943489472071337
+          ],
+          "adapter_better_fraction": 1.0
+        }
+      },
+      "rna_quartiles": {
+        "Q1": {
+          "n_complexes": 2,
+          "ratio_of_means": 0.9650199179333763,
+          "delta_prior_minus_adapter": 0.046071797609329224,
+          "adapter_better_fraction": 1.0
+        },
+        "Q2": {
+          "n_complexes": 1,
+          "ratio_of_means": 0.9462372308803157,
+          "delta_prior_minus_adapter": 0.10074388980865479,
+          "adapter_better_fraction": 1.0
+        },
+        "Q3": {
+          "n_complexes": 2,
+          "ratio_of_means": 0.9247332653161895,
+          "delta_prior_minus_adapter": 0.14915210008621216,
+          "adapter_better_fraction": 1.0
+        },
+        "Q4": {
+          "n_complexes": 1,
+          "ratio_of_means": 0.9775909985274371,
+          "delta_prior_minus_adapter": 0.05530071258544922,
+          "adapter_better_fraction": 1.0
+        }
+      }
+    },
+    "P2_token_off": {
+      "protein_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 2.465705712636312,
+        "prior_nll": 2.465705712636312,
+        "ratio_of_means": 1.0,
+        "mean_of_per_complex_ratios": 1.0,
+        "delta_prior_minus_adapter": 0.0,
+        "adapter_recovery": 0.2594469338655472,
+        "prior_recovery": 0.2594469338655472,
+        "delta_recovery_adapter_minus_prior": 0.0,
+        "adapter_better_fraction": 0.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 1.0,
+          "ratio_ci95": [
+            1.0,
+            1.0
+          ],
+          "delta_prior_minus_adapter": 0.0,
+          "delta_ci95": [
+            0.0,
+            0.0
+          ],
+          "adapter_better_fraction": 0.0
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 1.8231861889362335,
+        "prior_nll": 1.8231861889362335,
+        "ratio_of_means": 1.0,
+        "mean_of_per_complex_ratios": 1.0,
+        "delta_prior_minus_adapter": 0.0,
+        "adapter_recovery": 0.24119630952676138,
+        "prior_recovery": 0.24119630952676138,
+        "delta_recovery_adapter_minus_prior": 0.0,
+        "adapter_better_fraction": 0.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 1.0,
+          "ratio_ci95": [
+            1.0,
+            1.0
+          ],
+          "delta_prior_minus_adapter": 0.0,
+          "delta_ci95": [
+            0.0,
+            0.0
+          ],
+          "adapter_better_fraction": 0.0
+        }
+      },
+      "rna_quartiles": {
+        "Q1": {
+          "n_complexes": 2,
+          "ratio_of_means": 1.0,
+          "delta_prior_minus_adapter": 0.0,
+          "adapter_better_fraction": 0.0
+        },
+        "Q2": {
+          "n_complexes": 1,
+          "ratio_of_means": 1.0,
+          "delta_prior_minus_adapter": 0.0,
+          "adapter_better_fraction": 0.0
+        },
+        "Q3": {
+          "n_complexes": 2,
+          "ratio_of_means": 1.0,
+          "delta_prior_minus_adapter": 0.0,
+          "adapter_better_fraction": 0.0
+        },
+        "Q4": {
+          "n_complexes": 1,
+          "ratio_of_means": 1.0,
+          "delta_prior_minus_adapter": 0.0,
+          "adapter_better_fraction": 0.0
+        }
+      }
+    },
+    "P3_partner_shuffle": {
+      "protein_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 2.3999837418397267,
+        "prior_nll": 2.465705712636312,
+        "ratio_of_means": 0.9733455738615636,
+        "mean_of_per_complex_ratios": 0.9761158541883086,
+        "delta_prior_minus_adapter": 0.06572197079658511,
+        "adapter_recovery": 0.2714863995711009,
+        "prior_recovery": 0.2594469338655472,
+        "delta_recovery_adapter_minus_prior": 0.01203946570555369,
+        "adapter_better_fraction": 0.8333333333333334,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9733455738615636,
+          "ratio_ci95": [
+            0.9434875416389944,
+            1.0133654566952734
+          ],
+          "delta_prior_minus_adapter": 0.06572197079658526,
+          "delta_ci95": [
+            -0.030758690834045588,
+            0.14427408973375933
+          ],
+          "adapter_better_fraction": 0.8333333333333334
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 6,
+        "adapter_nll": 1.7009999608000121,
+        "prior_nll": 1.8231861889362335,
+        "ratio_of_means": 0.9329820350342206,
+        "mean_of_per_complex_ratios": 0.935406964384541,
+        "delta_prior_minus_adapter": 0.12218622813622156,
+        "adapter_recovery": 0.2754606590606272,
+        "prior_recovery": 0.24119630952676138,
+        "delta_recovery_adapter_minus_prior": 0.03426434953386585,
+        "adapter_better_fraction": 1.0,
+        "paired_bootstrap_10000": {
+          "n": 6,
+          "repeats": 10000,
+          "ratio_of_means": 0.9329820350342206,
+          "ratio_ci95": [
+            0.8870271338274351,
+            0.9663791887182579
+          ],
+          "delta_prior_minus_adapter": 0.12218622813622138,
+          "delta_ci95": [
+            0.05657574484745642,
+            0.21442570586999277
+          ],
+          "adapter_better_fraction": 1.0
+        }
+      },
+      "rna_quartiles": {
+        "Q1": {
+          "n_complexes": 2,
+          "ratio_of_means": 0.9473439685706414,
+          "delta_prior_minus_adapter": 0.06935255378484728,
+          "adapter_better_fraction": 1.0
+        },
+        "Q2": {
+          "n_complexes": 1,
+          "ratio_of_means": 0.9413081113233445,
+          "delta_prior_minus_adapter": 0.10998036861419669,
+          "adapter_better_fraction": 1.0
+        },
+        "Q3": {
+          "n_complexes": 2,
+          "ratio_of_means": 0.905204597353347,
+          "delta_prior_minus_adapter": 0.18785102665424347,
+          "adapter_better_fraction": 1.0
+        },
+        "Q4": {
+          "n_complexes": 1,
+          "ratio_of_means": 0.9559404026525067,
+          "delta_prior_minus_adapter": 0.10872983932495117,
+          "adapter_better_fraction": 1.0
+        }
+      }
+    },
+    "P1_native_vs_P2_token_off": {
+      "protein_all": {
+        "left_nll": 2.1393083135286965,
+        "right_nll": 2.1419262091318765,
+        "left_minus_right": -0.0026178956031799316,
+        "native_better_fraction": 0.8333333333333334
+      },
+      "protein_active": {
+        "left_nll": 2.1705480813980103,
+        "right_nll": 2.191369652748108,
+        "left_minus_right": -0.020821571350097656,
+        "native_better_fraction": 0.8333333333333334
+      },
+      "protein_interface": {
+        "left_nll": 2.4016077518463135,
+        "right_nll": 2.465705712636312,
+        "left_minus_right": -0.06409796078999837,
+        "native_better_fraction": 0.8333333333333334
+      },
+      "rna_all": {
+        "left_nll": 1.637696276108424,
+        "right_nll": 1.7151094774405162,
+        "left_minus_right": -0.07741320133209229,
+        "native_better_fraction": 0.8333333333333334
+      },
+      "rna_active": {
+        "left_nll": 1.6690505743026733,
+        "right_nll": 1.7525282601515453,
+        "left_minus_right": -0.08347768584887187,
+        "native_better_fraction": 0.8333333333333334
+      },
+      "rna_interface": {
+        "left_nll": 1.7321041226387024,
+        "right_nll": 1.8231861889362335,
+        "left_minus_right": -0.09108206629753113,
+        "native_better_fraction": 1.0
+      }
+    },
+    "P1_native_vs_P3_partner_shuffle": {
+      "protein_all": {
+        "left_nll": 2.1393083135286965,
+        "right_nll": 2.1373496890068053,
+        "left_minus_right": 0.001958624521891291,
+        "native_better_fraction": 0.16666666666666666
+      },
+      "protein_active": {
+        "left_nll": 2.1705480813980103,
+        "right_nll": 2.1668366114298503,
+        "left_minus_right": 0.0037114699681600007,
+        "native_better_fraction": 0.16666666666666666
+      },
+      "protein_interface": {
+        "left_nll": 2.4016077518463135,
+        "right_nll": 2.3999837418397267,
+        "left_minus_right": 0.0016240100065867402,
+        "native_better_fraction": 0.3333333333333333
+      },
+      "rna_all": {
+        "left_nll": 1.637696276108424,
+        "right_nll": 1.6159894173343974,
+        "left_minus_right": 0.021706858774026245,
+        "native_better_fraction": 0.16666666666666666
+      },
+      "rna_active": {
+        "left_nll": 1.6690505743026733,
+        "right_nll": 1.6431629369656244,
+        "left_minus_right": 0.02588763733704887,
+        "native_better_fraction": 0.16666666666666666
+      },
+      "rna_interface": {
+        "left_nll": 1.7321041226387024,
+        "right_nll": 1.7009999608000121,
+        "left_minus_right": 0.03110416183869043,
+        "native_better_fraction": 0.16666666666666666
+      }
+    }
+  },
+  "audits": {
+    "manifest_cache_id_match": true,
+    "composition_checks": 240,
+    "composition_failures": 0,
+    "active_mask_source": "same frozen cache masks for P0-P3"
+  }
+}

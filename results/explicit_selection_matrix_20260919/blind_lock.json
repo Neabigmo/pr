@@ -1,0 +1,17 @@
+{
+  "protocol": "A2_new_blind_p0_p3",
+  "test_read": true,
+  "blind_manifest": "I:\\PR_PILOT_SCIENTIFIC\\20260919\\blind_new_a2\\manifest\\complex_test.tsv",
+  "manifest_sha256": "08DB8BC59D70DB13935C49927FFFF5AB74CF5DAE2431DA751B58113AEACE8BF4",
+  "development_train_sha256": "2FDD49393147B32D39B497728292F93D74E9F8A5EB275217FF13AA5F8985AEE0",
+  "development_val_sha256": "0A44704721237D2C77EAE582E49ADF9C3B3817974FEB9D4C17C81BD699E9B06B",
+  "checkpoint": "I:\\PR_PILOT_SCIENTIFIC\\20260919\\reports\\explicit_selection_matrix\\A2_refit_blind\\final.pt",
+  "checkpoint_sha256": "62F89D8FEC77DBE1DC6C0B03E77D034D6986CEE124046D40041AD62B1068DF98",
+  "blind_complexes": 6,
+  "single_seed": 20260919,
+  "model_variant": "A2",
+  "prior_retrained": false,
+  "model_selection_complete": true,
+  "old_holdout_metrics_read": false,
+  "summary": "I:\\PR_PILOT_SCIENTIFIC\\20260919\\reports\\a2_new_blind_p0_p3\\blind_summary.json"
+}

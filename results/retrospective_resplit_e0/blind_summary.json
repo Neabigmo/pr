@@ -1,0 +1,1937 @@
+{
+  "protocol": {
+    "test_read": true,
+    "retrospective_resplit": true,
+    "blind_complexes": 215,
+    "prior_retrained": false,
+    "adapter_retrained": true,
+    "single_seed": 20260919,
+    "condition_definition": "P0 frozen priors; P1 native E0; P2 token-off; P3 20 composition-preserving partner shuffles",
+    "shuffle_repeats": 20,
+    "bootstrap_repeats": 10000,
+    "checkpoint": "I:\\PR_PILOT_SCIENTIFIC\\20260919\\reports\\resplit_e0_cv\\refit\\E0_resplit\\final.pt",
+    "manifest": "I:\\PR_PILOT_SCIENTIFIC\\20260919\\resplit_e0\\manifest\\complex_test.tsv",
+    "manifest_sha256": "d3e6af691ad2302345febd89340c81b38ac6bec4fe9e1cd11e96cf82eadfde81",
+    "selection_completed_before_blind": true
+  },
+  "spec": {
+    "geometry": "G2",
+    "r2p_k": 8,
+    "p2r_k": 12,
+    "radius": 14.979730606,
+    "aggregation": "A0",
+    "interaction": "multiplicative",
+    "residual": "scalar_gate",
+    "separate_edge_encoders": true,
+    "modality_projector": true,
+    "rna_gate_mode": "baseline",
+    "balanced_sampling": false,
+    "sampler_variables": [],
+    "name": "E0_resplit"
+  },
+  "conditions": {
+    "P1_native": {
+      "condition": "P1_native",
+      "protein_all": {
+        "n_complexes": 215,
+        "adapter_nll": 2.1771714975667553,
+        "prior_nll": 2.191220017921093,
+        "ratio_of_means": 0.9935887221550367,
+        "mean_of_per_complex_ratios": 0.9936407553770431,
+        "delta_prior_minus_adapter": 0.014048520354337471,
+        "adapter_recovery": 0.3267016125972881,
+        "prior_recovery": 0.3241102897150572,
+        "delta_recovery_adapter_minus_prior": 0.0025913228822308917,
+        "adapter_better_fraction": 0.9674418604651163,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9935887221550367,
+          "ratio_ci95": [
+            0.9927487289890855,
+            0.9943624446289492
+          ],
+          "delta_prior_minus_adapter": 0.014048520354337679,
+          "delta_ci95": [
+            0.01233842963396129,
+            0.01593711133613145
+          ],
+          "adapter_better_fraction": 0.9674418604651163
+        }
+      },
+      "protein_active": {
+        "n_complexes": 215,
+        "adapter_nll": 2.2346743101297424,
+        "prior_nll": 2.264749590186186,
+        "ratio_of_means": 0.9867202625019701,
+        "mean_of_per_complex_ratios": 0.9868348977646803,
+        "delta_prior_minus_adapter": 0.030075280056443325,
+        "adapter_recovery": 0.3082050308931706,
+        "prior_recovery": 0.30301325681597685,
+        "delta_recovery_adapter_minus_prior": 0.005191774077193682,
+        "adapter_better_fraction": 0.9441860465116279,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9867202625019701,
+          "ratio_ci95": [
+            0.9853333737517257,
+            0.9880544901314907
+          ],
+          "delta_prior_minus_adapter": 0.030075280056443443,
+          "delta_ci95": [
+            0.027027526539425684,
+            0.033292032646578436
+          ],
+          "adapter_better_fraction": 0.9441860465116279
+        }
+      },
+      "protein_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 2.4053644163663996,
+        "prior_nll": 2.4730904346288636,
+        "ratio_of_means": 0.972614823415211,
+        "mean_of_per_complex_ratios": 0.9730411080931785,
+        "delta_prior_minus_adapter": 0.06772601826246395,
+        "adapter_recovery": 0.2526230868038743,
+        "prior_recovery": 0.23894156077226927,
+        "delta_recovery_adapter_minus_prior": 0.013681526031605032,
+        "adapter_better_fraction": 0.9953488372093023,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.972614823415211,
+          "ratio_ci95": [
+            0.9707231400123076,
+            0.9743787162032257
+          ],
+          "delta_prior_minus_adapter": 0.06772601826246394,
+          "delta_ci95": [
+            0.06301608594351059,
+            0.07279276990613257
+          ],
+          "adapter_better_fraction": 0.9953488372093023
+        }
+      },
+      "rna_all": {
+        "n_complexes": 215,
+        "adapter_nll": 1.230414677082106,
+        "prior_nll": 1.2411109386488448,
+        "ratio_of_means": 0.9913817038963629,
+        "mean_of_per_complex_ratios": 1.0015593589607215,
+        "delta_prior_minus_adapter": 0.01069626156673875,
+        "adapter_recovery": 0.4646011557689933,
+        "prior_recovery": 0.45757744932590527,
+        "delta_recovery_adapter_minus_prior": 0.007023706443087999,
+        "adapter_better_fraction": 0.5906976744186047,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9913817038963629,
+          "ratio_ci95": [
+            0.9844413894672139,
+            0.9982918026111285
+          ],
+          "delta_prior_minus_adapter": 0.010696261566738752,
+          "delta_ci95": [
+            0.002071595129578585,
+            0.01970311285797936
+          ],
+          "adapter_better_fraction": 0.5906976744186047
+        }
+      },
+      "rna_active": {
+        "n_complexes": 215,
+        "adapter_nll": 1.20930591350378,
+        "prior_nll": 1.2213356529557429,
+        "ratio_of_means": 0.9901503412081275,
+        "mean_of_per_complex_ratios": 1.004716491941561,
+        "delta_prior_minus_adapter": 0.012029739451962848,
+        "adapter_recovery": 0.4731376901615498,
+        "prior_recovery": 0.46500367061343306,
+        "delta_recovery_adapter_minus_prior": 0.008134019548116728,
+        "adapter_better_fraction": 0.5906976744186047,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9901503412081275,
+          "ratio_ci95": [
+            0.9818086082642198,
+            0.9985397718830857
+          ],
+          "delta_prior_minus_adapter": 0.01202973945196284,
+          "delta_ci95": [
+            0.0017396862874196062,
+            0.022779966391796358
+          ],
+          "adapter_better_fraction": 0.5906976744186047
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2242370401704035,
+        "prior_nll": 1.2347786605358124,
+        "ratio_of_means": 0.9914627449418063,
+        "mean_of_per_complex_ratios": 1.0067688489824151,
+        "delta_prior_minus_adapter": 0.010541620365408963,
+        "adapter_recovery": 0.4672022224512211,
+        "prior_recovery": 0.45890054480974063,
+        "delta_recovery_adapter_minus_prior": 0.008301677641480468,
+        "adapter_better_fraction": 0.5674418604651162,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9914627449418063,
+          "ratio_ci95": [
+            0.9828802683609165,
+            1.0002366532468097
+          ],
+          "delta_prior_minus_adapter": 0.010541620365408955,
+          "delta_ci95": [
+            -0.00028574260861382586,
+            0.021568249779385106
+          ],
+          "adapter_better_fraction": 0.5674418604651162
+        }
+      }
+    },
+    "P2_token_off": {
+      "condition": "P2_token_off",
+      "protein_all": {
+        "n_complexes": 215,
+        "adapter_nll": 2.17837502845498,
+        "prior_nll": 2.191220017921093,
+        "ratio_of_means": 0.9941379736580266,
+        "mean_of_per_complex_ratios": 0.9941860544224982,
+        "delta_prior_minus_adapter": 0.012844989466112714,
+        "adapter_recovery": 0.3263597529987956,
+        "prior_recovery": 0.3241102897150572,
+        "delta_recovery_adapter_minus_prior": 0.0022494632837384244,
+        "adapter_better_fraction": 0.9674418604651163,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9941379736580266,
+          "ratio_ci95": [
+            0.9933663416212439,
+            0.9948364821915704
+          ],
+          "delta_prior_minus_adapter": 0.0128449894661129,
+          "delta_ci95": [
+            0.011289110211438769,
+            0.014575970990713148
+          ],
+          "adapter_better_fraction": 0.9674418604651163
+        }
+      },
+      "protein_active": {
+        "n_complexes": 215,
+        "adapter_nll": 2.237463864614797,
+        "prior_nll": 2.264749590186186,
+        "ratio_of_means": 0.9879519900612299,
+        "mean_of_per_complex_ratios": 0.9880495926139254,
+        "delta_prior_minus_adapter": 0.027285725571388423,
+        "adapter_recovery": 0.30771785232909893,
+        "prior_recovery": 0.30301325681597685,
+        "delta_recovery_adapter_minus_prior": 0.004704595513122026,
+        "adapter_better_fraction": 0.9441860465116279,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9879519900612299,
+          "ratio_ci95": [
+            0.9866888995994954,
+            0.9891608943043272
+          ],
+          "delta_prior_minus_adapter": 0.027285725571388753,
+          "delta_ci95": [
+            0.024510001969891903,
+            0.030185336179511312
+          ],
+          "adapter_better_fraction": 0.9441860465116279
+        }
+      },
+      "protein_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 2.410204349562179,
+        "prior_nll": 2.4730904346288636,
+        "ratio_of_means": 0.974571861915708,
+        "mean_of_per_complex_ratios": 0.9749541062455443,
+        "delta_prior_minus_adapter": 0.06288608506668446,
+        "adapter_recovery": 0.2505588077355263,
+        "prior_recovery": 0.23894156077226927,
+        "delta_recovery_adapter_minus_prior": 0.011617246963257014,
+        "adapter_better_fraction": 0.9953488372093023,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.974571861915708,
+          "ratio_ci95": [
+            0.9728849631151252,
+            0.976172991691656
+          ],
+          "delta_prior_minus_adapter": 0.06288608506668458,
+          "delta_ci95": [
+            0.058628813887751055,
+            0.06737045518187594
+          ],
+          "adapter_better_fraction": 0.9953488372093023
+        }
+      },
+      "rna_all": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2308892376201097,
+        "prior_nll": 1.2411109386488448,
+        "ratio_of_means": 0.9917640714375919,
+        "mean_of_per_complex_ratios": 1.0010659072514292,
+        "delta_prior_minus_adapter": 0.010221701028735139,
+        "adapter_recovery": 0.46343272473923,
+        "prior_recovery": 0.45757744932590527,
+        "delta_recovery_adapter_minus_prior": 0.005855275413324666,
+        "adapter_better_fraction": 0.5767441860465117,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9917640714375919,
+          "ratio_ci95": [
+            0.9852900721542411,
+            0.9982344482740488
+          ],
+          "delta_prior_minus_adapter": 0.010221701028735097,
+          "delta_ci95": [
+            0.0021458796325117104,
+            0.018620210414709057
+          ],
+          "adapter_better_fraction": 0.5767441860465117
+        }
+      },
+      "rna_active": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2099421050659447,
+        "prior_nll": 1.2213356529557429,
+        "ratio_of_means": 0.9906712394236385,
+        "mean_of_per_complex_ratios": 1.004175051933234,
+        "delta_prior_minus_adapter": 0.011393547889798187,
+        "adapter_recovery": 0.47200354635715486,
+        "prior_recovery": 0.46500367061343306,
+        "delta_recovery_adapter_minus_prior": 0.006999875743721806,
+        "adapter_better_fraction": 0.5720930232558139,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9906712394236385,
+          "ratio_ci95": [
+            0.9827774253557758,
+            0.9985182886830127
+          ],
+          "delta_prior_minus_adapter": 0.011393547889798183,
+          "delta_ci95": [
+            0.0017557935000852398,
+            0.021487908806911808
+          ],
+          "adapter_better_fraction": 0.5720930232558139
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2244719862937927,
+        "prior_nll": 1.2347786605358124,
+        "ratio_of_means": 0.9916530188191403,
+        "mean_of_per_complex_ratios": 1.0058244576952242,
+        "delta_prior_minus_adapter": 0.010306674242019653,
+        "adapter_recovery": 0.46607692834249764,
+        "prior_recovery": 0.45890054480974063,
+        "delta_recovery_adapter_minus_prior": 0.007176383532756983,
+        "adapter_better_fraction": 0.5488372093023256,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9916530188191403,
+          "ratio_ci95": [
+            0.9836373554493262,
+            0.9999496151315593
+          ],
+          "delta_prior_minus_adapter": 0.010306674242019698,
+          "delta_ci95": [
+            6.130453459050073e-05,
+            0.02056929486435512
+          ],
+          "adapter_better_fraction": 0.5488372093023256
+        }
+      }
+    },
+    "P3_partner_shuffle": {
+      "condition": "P3_partner_shuffle",
+      "protein_all": {
+        "n_complexes": 215,
+        "adapter_nll": 2.1772166736735854,
+        "prior_nll": 2.191220017921093,
+        "ratio_of_means": 0.9936093390289519,
+        "mean_of_per_complex_ratios": 0.9936627667450798,
+        "delta_prior_minus_adapter": 0.014003344247507495,
+        "adapter_recovery": 0.3266270956708941,
+        "prior_recovery": 0.3241102897150572,
+        "delta_recovery_adapter_minus_prior": 0.002516805955836942,
+        "adapter_better_fraction": 0.9720930232558139,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9936093390289519,
+          "ratio_ci95": [
+            0.9927586633823368,
+            0.9943867151765883
+          ],
+          "delta_prior_minus_adapter": 0.014003344247507599,
+          "delta_ci95": [
+            0.012289696838966335,
+            0.015896779152543405
+          ],
+          "adapter_better_fraction": 0.9720930232558139
+        }
+      },
+      "protein_active": {
+        "n_complexes": 215,
+        "adapter_nll": 2.2347208468858586,
+        "prior_nll": 2.264749590186186,
+        "ratio_of_means": 0.9867408108029027,
+        "mean_of_per_complex_ratios": 0.9868561581684994,
+        "delta_prior_minus_adapter": 0.030028743300327034,
+        "adapter_recovery": 0.3080398936084537,
+        "prior_recovery": 0.30301325681597685,
+        "delta_recovery_adapter_minus_prior": 0.0050266367924767874,
+        "adapter_better_fraction": 0.9441860465116279,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9867408108029027,
+          "ratio_ci95": [
+            0.9853501791586986,
+            0.9880850511352323
+          ],
+          "delta_prior_minus_adapter": 0.030028743300327232,
+          "delta_ci95": [
+            0.026957122149855316,
+            0.03325110836153785
+          ],
+          "adapter_better_fraction": 0.9441860465116279
+        }
+      },
+      "protein_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 2.4052075159272484,
+        "prior_nll": 2.4730904346288636,
+        "ratio_of_means": 0.97255138034942,
+        "mean_of_per_complex_ratios": 0.9729875680283977,
+        "delta_prior_minus_adapter": 0.06788291870161545,
+        "adapter_recovery": 0.25187661727153976,
+        "prior_recovery": 0.23894156077226927,
+        "delta_recovery_adapter_minus_prior": 0.012935056499270505,
+        "adapter_better_fraction": 0.9953488372093023,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.97255138034942,
+          "ratio_ci95": [
+            0.9706431406998897,
+            0.9743367699102743
+          ],
+          "delta_prior_minus_adapter": 0.06788291870161522,
+          "delta_ci95": [
+            0.06312728409295823,
+            0.07297679601020589
+          ],
+          "adapter_better_fraction": 0.9953488372093023
+        }
+      },
+      "rna_all": {
+        "n_complexes": 215,
+        "adapter_nll": 1.230550473762113,
+        "prior_nll": 1.2411109386488448,
+        "ratio_of_means": 0.9914911193207041,
+        "mean_of_per_complex_ratios": 1.0015394666866861,
+        "delta_prior_minus_adapter": 0.010560464886731876,
+        "adapter_recovery": 0.4642175350684759,
+        "prior_recovery": 0.45757744932590527,
+        "delta_recovery_adapter_minus_prior": 0.006640085742570632,
+        "adapter_better_fraction": 0.5953488372093023,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9914911193207041,
+          "ratio_ci95": [
+            0.9846246187013964,
+            0.9983296315477865
+          ],
+          "delta_prior_minus_adapter": 0.010560464886731902,
+          "delta_ci95": [
+            0.0020270420662885816,
+            0.019473486912458298
+          ],
+          "adapter_better_fraction": 0.5953488372093023
+        }
+      },
+      "rna_active": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2094941144419271,
+        "prior_nll": 1.2213356529557429,
+        "ratio_of_means": 0.9903044355700595,
+        "mean_of_per_complex_ratios": 1.0046649401842886,
+        "delta_prior_minus_adapter": 0.011841538513815674,
+        "adapter_recovery": 0.47283623278660825,
+        "prior_recovery": 0.46500367061343306,
+        "delta_recovery_adapter_minus_prior": 0.007832562173175258,
+        "adapter_better_fraction": 0.5953488372093023,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9903044355700595,
+          "ratio_ci95": [
+            0.9820737397503149,
+            0.9985908840147746
+          ],
+          "delta_prior_minus_adapter": 0.011841538513815753,
+          "delta_ci95": [
+            0.0016803688197288005,
+            0.022432376069211668
+          ],
+          "adapter_better_fraction": 0.5953488372093023
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2240124667106673,
+        "prior_nll": 1.2347786605358124,
+        "ratio_of_means": 0.991280871487953,
+        "mean_of_per_complex_ratios": 1.0065604329363682,
+        "delta_prior_minus_adapter": 0.010766193825145095,
+        "adapter_recovery": 0.4666560797341341,
+        "prior_recovery": 0.45890054480974063,
+        "delta_recovery_adapter_minus_prior": 0.007755534924393478,
+        "adapter_better_fraction": 0.5720930232558139,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.991280871487953,
+          "ratio_ci95": [
+            0.9827628595947429,
+            1.0001101898306366
+          ],
+          "delta_prior_minus_adapter": 0.010766193825145098,
+          "delta_ci95": [
+            -0.00012930092873976722,
+            0.021714520858124427
+          ],
+          "adapter_better_fraction": 0.5720930232558139
+        }
+      }
+    }
+  },
+  "comparisons": {
+    "P1_native": {
+      "protein_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 2.4053644163663996,
+        "prior_nll": 2.4730904346288636,
+        "ratio_of_means": 0.972614823415211,
+        "mean_of_per_complex_ratios": 0.9730411080931785,
+        "delta_prior_minus_adapter": 0.06772601826246395,
+        "adapter_recovery": 0.2526230868038743,
+        "prior_recovery": 0.23894156077226927,
+        "delta_recovery_adapter_minus_prior": 0.013681526031605032,
+        "adapter_better_fraction": 0.9953488372093023,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.972614823415211,
+          "ratio_ci95": [
+            0.9707231400123076,
+            0.9743787162032257
+          ],
+          "delta_prior_minus_adapter": 0.06772601826246394,
+          "delta_ci95": [
+            0.06301608594351059,
+            0.07279276990613257
+          ],
+          "adapter_better_fraction": 0.9953488372093023
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2242370401704035,
+        "prior_nll": 1.2347786605358124,
+        "ratio_of_means": 0.9914627449418063,
+        "mean_of_per_complex_ratios": 1.0067688489824151,
+        "delta_prior_minus_adapter": 0.010541620365408963,
+        "adapter_recovery": 0.4672022224512211,
+        "prior_recovery": 0.45890054480974063,
+        "delta_recovery_adapter_minus_prior": 0.008301677641480468,
+        "adapter_better_fraction": 0.5674418604651162,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9914627449418063,
+          "ratio_ci95": [
+            0.9828802683609165,
+            1.0002366532468097
+          ],
+          "delta_prior_minus_adapter": 0.010541620365408955,
+          "delta_ci95": [
+            -0.00028574260861382586,
+            0.021568249779385106
+          ],
+          "adapter_better_fraction": 0.5674418604651162
+        }
+      },
+      "rna_quartiles": {
+        "Q1": {
+          "n_complexes": 54,
+          "prior_interface_nll": 0.7634720123476453,
+          "adapter_interface_nll": 0.8378667991470408,
+          "ratio_of_means": 1.0974427164273313,
+          "delta_prior_minus_adapter": -0.07439478679939553,
+          "adapter_better_fraction": 0.12962962962962962
+        },
+        "Q2": {
+          "n_complexes": 54,
+          "prior_interface_nll": 1.143584825374462,
+          "adapter_interface_nll": 1.1282649636268616,
+          "ratio_of_means": 0.9866036507238682,
+          "delta_prior_minus_adapter": 0.015319861747600414,
+          "adapter_better_fraction": 0.5555555555555556
+        },
+        "Q3": {
+          "n_complexes": 54,
+          "prior_interface_nll": 1.3587151765823364,
+          "adapter_interface_nll": 1.320457641725187,
+          "ratio_of_means": 0.971842858962258,
+          "delta_prior_minus_adapter": 0.03825753485714948,
+          "adapter_better_fraction": 0.7962962962962963
+        },
+        "Q4": {
+          "n_complexes": 53,
+          "prior_interface_nll": 1.6816174196747113,
+          "adapter_interface_nll": 1.6176440715789795,
+          "ratio_of_means": 0.9619572517819739,
+          "delta_prior_minus_adapter": 0.06397334809573192,
+          "adapter_better_fraction": 0.7924528301886793
+        }
+      }
+    },
+    "P2_token_off": {
+      "protein_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 2.410204349562179,
+        "prior_nll": 2.4730904346288636,
+        "ratio_of_means": 0.974571861915708,
+        "mean_of_per_complex_ratios": 0.9749541062455443,
+        "delta_prior_minus_adapter": 0.06288608506668446,
+        "adapter_recovery": 0.2505588077355263,
+        "prior_recovery": 0.23894156077226927,
+        "delta_recovery_adapter_minus_prior": 0.011617246963257014,
+        "adapter_better_fraction": 0.9953488372093023,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.974571861915708,
+          "ratio_ci95": [
+            0.9728849631151252,
+            0.976172991691656
+          ],
+          "delta_prior_minus_adapter": 0.06288608506668458,
+          "delta_ci95": [
+            0.058628813887751055,
+            0.06737045518187594
+          ],
+          "adapter_better_fraction": 0.9953488372093023
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2244719862937927,
+        "prior_nll": 1.2347786605358124,
+        "ratio_of_means": 0.9916530188191403,
+        "mean_of_per_complex_ratios": 1.0058244576952242,
+        "delta_prior_minus_adapter": 0.010306674242019653,
+        "adapter_recovery": 0.46607692834249764,
+        "prior_recovery": 0.45890054480974063,
+        "delta_recovery_adapter_minus_prior": 0.007176383532756983,
+        "adapter_better_fraction": 0.5488372093023256,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.9916530188191403,
+          "ratio_ci95": [
+            0.9836373554493262,
+            0.9999496151315593
+          ],
+          "delta_prior_minus_adapter": 0.010306674242019698,
+          "delta_ci95": [
+            6.130453459050073e-05,
+            0.02056929486435512
+          ],
+          "adapter_better_fraction": 0.5488372093023256
+        }
+      },
+      "rna_quartiles": {
+        "Q1": {
+          "n_complexes": 54,
+          "prior_interface_nll": 0.7634720123476453,
+          "adapter_interface_nll": 0.8319151478785055,
+          "ratio_of_means": 1.089647209621215,
+          "delta_prior_minus_adapter": -0.06844313553086033,
+          "adapter_better_fraction": 0.1111111111111111
+        },
+        "Q2": {
+          "n_complexes": 54,
+          "prior_interface_nll": 1.143584825374462,
+          "adapter_interface_nll": 1.1288420028156705,
+          "ratio_of_means": 0.9871082387316883,
+          "delta_prior_minus_adapter": 0.014742822558791549,
+          "adapter_better_fraction": 0.5555555555555556
+        },
+        "Q3": {
+          "n_complexes": 54,
+          "prior_interface_nll": 1.3587151765823364,
+          "adapter_interface_nll": 1.3222298290994432,
+          "ratio_of_means": 0.9731471701268053,
+          "delta_prior_minus_adapter": 0.0364853474828932,
+          "adapter_better_fraction": 0.7962962962962963
+        },
+        "Q4": {
+          "n_complexes": 53,
+          "prior_interface_nll": 1.6816174196747113,
+          "adapter_interface_nll": 1.6222675498926415,
+          "ratio_of_means": 0.9647066751999094,
+          "delta_prior_minus_adapter": 0.05934986978206994,
+          "adapter_better_fraction": 0.7358490566037735
+        }
+      }
+    },
+    "P3_partner_shuffle": {
+      "protein_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 2.4052075159272484,
+        "prior_nll": 2.4730904346288636,
+        "ratio_of_means": 0.97255138034942,
+        "mean_of_per_complex_ratios": 0.9729875680283977,
+        "delta_prior_minus_adapter": 0.06788291870161545,
+        "adapter_recovery": 0.25187661727153976,
+        "prior_recovery": 0.23894156077226927,
+        "delta_recovery_adapter_minus_prior": 0.012935056499270505,
+        "adapter_better_fraction": 0.9953488372093023,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.97255138034942,
+          "ratio_ci95": [
+            0.9706431406998897,
+            0.9743367699102743
+          ],
+          "delta_prior_minus_adapter": 0.06788291870161522,
+          "delta_ci95": [
+            0.06312728409295823,
+            0.07297679601020589
+          ],
+          "adapter_better_fraction": 0.9953488372093023
+        }
+      },
+      "rna_interface": {
+        "n_complexes": 215,
+        "adapter_nll": 1.2240124667106673,
+        "prior_nll": 1.2347786605358124,
+        "ratio_of_means": 0.991280871487953,
+        "mean_of_per_complex_ratios": 1.0065604329363682,
+        "delta_prior_minus_adapter": 0.010766193825145095,
+        "adapter_recovery": 0.4666560797341341,
+        "prior_recovery": 0.45890054480974063,
+        "delta_recovery_adapter_minus_prior": 0.007755534924393478,
+        "adapter_better_fraction": 0.5720930232558139,
+        "paired_bootstrap_10000": {
+          "n": 215,
+          "ratio_of_means": 0.991280871487953,
+          "ratio_ci95": [
+            0.9827628595947429,
+            1.0001101898306366
+          ],
+          "delta_prior_minus_adapter": 0.010766193825145098,
+          "delta_ci95": [
+            -0.00012930092873976722,
+            0.021714520858124427
+          ],
+          "adapter_better_fraction": 0.5720930232558139
+        }
+      },
+      "rna_quartiles": {
+        "Q1": {
+          "n_complexes": 54,
+          "prior_interface_nll": 0.7634720123476453,
+          "adapter_interface_nll": 0.8378210595912406,
+          "ratio_of_means": 1.0973828064960431,
+          "delta_prior_minus_adapter": -0.07434904724359513,
+          "adapter_better_fraction": 0.12962962962962962
+        },
+        "Q2": {
+          "n_complexes": 54,
+          "prior_interface_nll": 1.143584825374462,
+          "adapter_interface_nll": 1.1279523220327166,
+          "ratio_of_means": 0.9863302634007699,
+          "delta_prior_minus_adapter": 0.015632503341745433,
+          "adapter_better_fraction": 0.5740740740740741
+        },
+        "Q3": {
+          "n_complexes": 54,
+          "prior_interface_nll": 1.3587151765823364,
+          "adapter_interface_nll": 1.3200087502046864,
+          "ratio_of_means": 0.97151247955071,
+          "delta_prior_minus_adapter": 0.03870642637764964,
+          "adapter_better_fraction": 0.7962962962962963
+        },
+        "Q4": {
+          "n_complexes": 53,
+          "prior_interface_nll": 1.6816174196747113,
+          "adapter_interface_nll": 1.6175555702650326,
+          "ratio_of_means": 0.9619046230966906,
+          "delta_prior_minus_adapter": 0.0640618494096792,
+          "adapter_better_fraction": 0.7924528301886793
+        }
+      }
+    },
+    "P1_native_vs_P2_token_off": {
+      "protein_all": {
+        "left_nll": 2.1771714975667553,
+        "right_nll": 2.17837502845498,
+        "left_minus_right": -0.001203530888224757,
+        "native_better_fraction": 0.7767441860465116
+      },
+      "protein_active": {
+        "left_nll": 2.2346743101297424,
+        "right_nll": 2.237463864614797,
+        "left_minus_right": -0.0027895544850549034,
+        "native_better_fraction": 0.7767441860465116
+      },
+      "protein_interface": {
+        "left_nll": 2.4053644163663996,
+        "right_nll": 2.410204349562179,
+        "left_minus_right": -0.00483993319577949,
+        "native_better_fraction": 0.7813953488372093
+      },
+      "rna_all": {
+        "left_nll": 1.230414677082106,
+        "right_nll": 1.2308892376201097,
+        "left_minus_right": -0.000474560538003611,
+        "native_better_fraction": 0.5488372093023256
+      },
+      "rna_active": {
+        "left_nll": 1.20930591350378,
+        "right_nll": 1.2099421050659447,
+        "left_minus_right": -0.0006361915621646615,
+        "native_better_fraction": 0.5488372093023256
+      },
+      "rna_interface": {
+        "left_nll": 1.2242370401704035,
+        "right_nll": 1.2244719862937927,
+        "left_minus_right": -0.0002349461233893106,
+        "native_better_fraction": 0.5627906976744186
+      }
+    },
+    "P1_native_vs_P3_partner_shuffle": {
+      "protein_all": {
+        "left_nll": 2.1771714975667553,
+        "right_nll": 2.1772166736735854,
+        "left_minus_right": -4.51761068299751e-05,
+        "native_better_fraction": 0.5488372093023256
+      },
+      "protein_active": {
+        "left_nll": 2.2346743101297424,
+        "right_nll": 2.2347208468858586,
+        "left_minus_right": -4.65367561162896e-05,
+        "native_better_fraction": 0.5488372093023256
+      },
+      "protein_interface": {
+        "left_nll": 2.4053644163663996,
+        "right_nll": 2.4052075159272484,
+        "left_minus_right": 0.00015690043915149074,
+        "native_better_fraction": 0.48372093023255813
+      },
+      "rna_all": {
+        "left_nll": 1.230414677082106,
+        "right_nll": 1.230550473762113,
+        "left_minus_right": -0.0001357966800068737,
+        "native_better_fraction": 0.5488372093023256
+      },
+      "rna_active": {
+        "left_nll": 1.20930591350378,
+        "right_nll": 1.2094941144419271,
+        "left_minus_right": -0.00018820093814717246,
+        "native_better_fraction": 0.5488372093023256
+      },
+      "rna_interface": {
+        "left_nll": 1.2242370401704035,
+        "right_nll": 1.2240124667106673,
+        "left_minus_right": 0.00022457345973613056,
+        "native_better_fraction": 0.413953488372093
+      }
+    }
+  },
+  "audits": {
+    "manifest_cache_id_match": true,
+    "composition_checks": 8600,
+    "composition_failures": 0,
+    "active_mask_source": "same frozen cache masks for P0-P3",
+    "edge_counts": [
+      {
+        "sample_id": "4WZM-assembly1",
+        "r2p_edges": 833,
+        "p2r_edges": 168
+      },
+      {
+        "sample_id": "9DTT-assembly1",
+        "r2p_edges": 576,
+        "p2r_edges": 243
+      },
+      {
+        "sample_id": "9SAQ-assembly1",
+        "r2p_edges": 904,
+        "p2r_edges": 255
+      },
+      {
+        "sample_id": "8RBJ-assembly1",
+        "r2p_edges": 205,
+        "p2r_edges": 117
+      },
+      {
+        "sample_id": "4X4V-assembly1",
+        "r2p_edges": 670,
+        "p2r_edges": 237
+      },
+      {
+        "sample_id": "6LSF-assembly1",
+        "r2p_edges": 921,
+        "p2r_edges": 226
+      },
+      {
+        "sample_id": "2DRA-assembly1",
+        "r2p_edges": 702,
+        "p2r_edges": 247
+      },
+      {
+        "sample_id": "7VG2-assembly1",
+        "r2p_edges": 2251,
+        "p2r_edges": 773
+      },
+      {
+        "sample_id": "4K4T-assembly1",
+        "r2p_edges": 1109,
+        "p2r_edges": 340
+      },
+      {
+        "sample_id": "7VG3-assembly1",
+        "r2p_edges": 1914,
+        "p2r_edges": 679
+      },
+      {
+        "sample_id": "6PZQ-assembly1",
+        "r2p_edges": 113,
+        "p2r_edges": 75
+      },
+      {
+        "sample_id": "8WFA-assembly1",
+        "r2p_edges": 2184,
+        "p2r_edges": 893
+      },
+      {
+        "sample_id": "6SJD-assembly1",
+        "r2p_edges": 672,
+        "p2r_edges": 288
+      },
+      {
+        "sample_id": "9M86-assembly1",
+        "r2p_edges": 393,
+        "p2r_edges": 231
+      },
+      {
+        "sample_id": "2ZH9-assembly1",
+        "r2p_edges": 596,
+        "p2r_edges": 235
+      },
+      {
+        "sample_id": "2PY9-assembly1",
+        "r2p_edges": 188,
+        "p2r_edges": 78
+      },
+      {
+        "sample_id": "4X4R-assembly1",
+        "r2p_edges": 717,
+        "p2r_edges": 259
+      },
+      {
+        "sample_id": "3KNA-assembly1",
+        "r2p_edges": 666,
+        "p2r_edges": 120
+      },
+      {
+        "sample_id": "4RWO-assembly1",
+        "r2p_edges": 746,
+        "p2r_edges": 303
+      },
+      {
+        "sample_id": "2E9Z-assembly1",
+        "r2p_edges": 794,
+        "p2r_edges": 168
+      },
+      {
+        "sample_id": "9N9C-assembly1",
+        "r2p_edges": 1675,
+        "p2r_edges": 830
+      },
+      {
+        "sample_id": "7XD9-assembly1",
+        "r2p_edges": 1016,
+        "p2r_edges": 252
+      },
+      {
+        "sample_id": "2DR9-assembly1",
+        "r2p_edges": 713,
+        "p2r_edges": 248
+      },
+      {
+        "sample_id": "6XQB-assembly1",
+        "r2p_edges": 728,
+        "p2r_edges": 180
+      },
+      {
+        "sample_id": "9NFA-assembly1",
+        "r2p_edges": 1569,
+        "p2r_edges": 540
+      },
+      {
+        "sample_id": "5F8G-assembly1",
+        "r2p_edges": 922,
+        "p2r_edges": 240
+      },
+      {
+        "sample_id": "8G6R-assembly1",
+        "r2p_edges": 914,
+        "p2r_edges": 259
+      },
+      {
+        "sample_id": "3NL0-assembly1",
+        "r2p_edges": 710,
+        "p2r_edges": 132
+      },
+      {
+        "sample_id": "2E9T-assembly1",
+        "r2p_edges": 726,
+        "p2r_edges": 156
+      },
+      {
+        "sample_id": "9ECE-assembly1",
+        "r2p_edges": 2038,
+        "p2r_edges": 640
+      },
+      {
+        "sample_id": "3AM1-assembly1",
+        "r2p_edges": 1064,
+        "p2r_edges": 724
+      },
+      {
+        "sample_id": "3BSO-assembly1",
+        "r2p_edges": 867,
+        "p2r_edges": 192
+      },
+      {
+        "sample_id": "8XPP-assembly1",
+        "r2p_edges": 949,
+        "p2r_edges": 294
+      },
+      {
+        "sample_id": "9SWO-assembly1",
+        "r2p_edges": 922,
+        "p2r_edges": 619
+      },
+      {
+        "sample_id": "3ADC-assembly1",
+        "r2p_edges": 1354,
+        "p2r_edges": 790
+      },
+      {
+        "sample_id": "2XD0-assembly1",
+        "r2p_edges": 360,
+        "p2r_edges": 188
+      },
+      {
+        "sample_id": "7B3C-assembly1",
+        "r2p_edges": 868,
+        "p2r_edges": 229
+      },
+      {
+        "sample_id": "8Y9L-assembly1",
+        "r2p_edges": 1054,
+        "p2r_edges": 383
+      },
+      {
+        "sample_id": "3OVA-assembly1",
+        "r2p_edges": 1400,
+        "p2r_edges": 494
+      },
+      {
+        "sample_id": "9NYB-assembly1",
+        "r2p_edges": 763,
+        "p2r_edges": 307
+      },
+      {
+        "sample_id": "6E9E-assembly1",
+        "r2p_edges": 1944,
+        "p2r_edges": 535
+      },
+      {
+        "sample_id": "7B3B-assembly1",
+        "r2p_edges": 815,
+        "p2r_edges": 222
+      },
+      {
+        "sample_id": "1JBS-assembly1",
+        "r2p_edges": 294,
+        "p2r_edges": 161
+      },
+      {
+        "sample_id": "4RWN-assembly1",
+        "r2p_edges": 753,
+        "p2r_edges": 307
+      },
+      {
+        "sample_id": "3H5X-assembly1",
+        "r2p_edges": 837,
+        "p2r_edges": 192
+      },
+      {
+        "sample_id": "2I91-assembly1",
+        "r2p_edges": 771,
+        "p2r_edges": 214
+      },
+      {
+        "sample_id": "4KR7-assembly1",
+        "r2p_edges": 1033,
+        "p2r_edges": 577
+      },
+      {
+        "sample_id": "2ZH2-assembly1",
+        "r2p_edges": 683,
+        "p2r_edges": 245
+      },
+      {
+        "sample_id": "5UD5-assembly1",
+        "r2p_edges": 433,
+        "p2r_edges": 325
+      },
+      {
+        "sample_id": "7BZF-assembly1",
+        "r2p_edges": 785,
+        "p2r_edges": 215
+      },
+      {
+        "sample_id": "4ZDO-assembly1",
+        "r2p_edges": 440,
+        "p2r_edges": 234
+      },
+      {
+        "sample_id": "2DR7-assembly1",
+        "r2p_edges": 593,
+        "p2r_edges": 232
+      },
+      {
+        "sample_id": "4ATO-assembly1",
+        "r2p_edges": 1983,
+        "p2r_edges": 1041
+      },
+      {
+        "sample_id": "3FTF-assembly1",
+        "r2p_edges": 448,
+        "p2r_edges": 253
+      },
+      {
+        "sample_id": "1YVP-assembly1",
+        "r2p_edges": 576,
+        "p2r_edges": 187
+      },
+      {
+        "sample_id": "9NEP-assembly1",
+        "r2p_edges": 1112,
+        "p2r_edges": 401
+      },
+      {
+        "sample_id": "6IV9-assembly1",
+        "r2p_edges": 2011,
+        "p2r_edges": 524
+      },
+      {
+        "sample_id": "3ADI-assembly1",
+        "r2p_edges": 127,
+        "p2r_edges": 96
+      },
+      {
+        "sample_id": "7L1F-assembly1",
+        "r2p_edges": 584,
+        "p2r_edges": 209
+      },
+      {
+        "sample_id": "5F8L-assembly1",
+        "r2p_edges": 921,
+        "p2r_edges": 239
+      },
+      {
+        "sample_id": "8H1B-assembly1",
+        "r2p_edges": 623,
+        "p2r_edges": 213
+      },
+      {
+        "sample_id": "6XMG-assembly1",
+        "r2p_edges": 2275,
+        "p2r_edges": 1173
+      },
+      {
+        "sample_id": "9EC9-assembly1",
+        "r2p_edges": 1371,
+        "p2r_edges": 526
+      },
+      {
+        "sample_id": "9KBY-assembly1",
+        "r2p_edges": 1431,
+        "p2r_edges": 598
+      },
+      {
+        "sample_id": "7VTN-assembly1",
+        "r2p_edges": 1606,
+        "p2r_edges": 742
+      },
+      {
+        "sample_id": "7ACT-assembly1",
+        "r2p_edges": 351,
+        "p2r_edges": 120
+      },
+      {
+        "sample_id": "4X4S-assembly1",
+        "r2p_edges": 715,
+        "p2r_edges": 259
+      },
+      {
+        "sample_id": "6GVY-assembly1",
+        "r2p_edges": 748,
+        "p2r_edges": 144
+      },
+      {
+        "sample_id": "3H5Y-assembly1",
+        "r2p_edges": 853,
+        "p2r_edges": 192
+      },
+      {
+        "sample_id": "7DFH-assembly1",
+        "r2p_edges": 937,
+        "p2r_edges": 240
+      },
+      {
+        "sample_id": "4K4W-assembly1",
+        "r2p_edges": 1046,
+        "p2r_edges": 333
+      },
+      {
+        "sample_id": "2ZH3-assembly1",
+        "r2p_edges": 674,
+        "p2r_edges": 247
+      },
+      {
+        "sample_id": "2DR8-assembly1",
+        "r2p_edges": 644,
+        "p2r_edges": 235
+      },
+      {
+        "sample_id": "5F8H-assembly1",
+        "r2p_edges": 935,
+        "p2r_edges": 240
+      },
+      {
+        "sample_id": "3OV7-assembly1",
+        "r2p_edges": 1327,
+        "p2r_edges": 476
+      },
+      {
+        "sample_id": "9M8Q-assembly1",
+        "r2p_edges": 2115,
+        "p2r_edges": 844
+      },
+      {
+        "sample_id": "4K4U-assembly1",
+        "r2p_edges": 1066,
+        "p2r_edges": 326
+      },
+      {
+        "sample_id": "9EC8-assembly1",
+        "r2p_edges": 2099,
+        "p2r_edges": 793
+      },
+      {
+        "sample_id": "2ZH6-assembly1",
+        "r2p_edges": 704,
+        "p2r_edges": 247
+      },
+      {
+        "sample_id": "2DVI-assembly1",
+        "r2p_edges": 706,
+        "p2r_edges": 246
+      },
+      {
+        "sample_id": "1WNE-assembly1",
+        "r2p_edges": 744,
+        "p2r_edges": 132
+      },
+      {
+        "sample_id": "6W62-assembly1",
+        "r2p_edges": 989,
+        "p2r_edges": 288
+      },
+      {
+        "sample_id": "2DRB-assembly1",
+        "r2p_edges": 800,
+        "p2r_edges": 258
+      },
+      {
+        "sample_id": "4WZQ-assembly1",
+        "r2p_edges": 764,
+        "p2r_edges": 156
+      },
+      {
+        "sample_id": "2XDD-assembly1",
+        "r2p_edges": 2016,
+        "p2r_edges": 1121
+      },
+      {
+        "sample_id": "7QDE-assembly1",
+        "r2p_edges": 369,
+        "p2r_edges": 120
+      },
+      {
+        "sample_id": "3ADD-assembly1",
+        "r2p_edges": 1185,
+        "p2r_edges": 764
+      },
+      {
+        "sample_id": "2ZH4-assembly1",
+        "r2p_edges": 712,
+        "p2r_edges": 247
+      },
+      {
+        "sample_id": "6FPX-assembly1",
+        "r2p_edges": 271,
+        "p2r_edges": 100
+      },
+      {
+        "sample_id": "5VOF-assembly1",
+        "r2p_edges": 156,
+        "p2r_edges": 65
+      },
+      {
+        "sample_id": "5DO4-assembly1",
+        "r2p_edges": 285,
+        "p2r_edges": 115
+      },
+      {
+        "sample_id": "5HP2-assembly1",
+        "r2p_edges": 662,
+        "p2r_edges": 295
+      },
+      {
+        "sample_id": "3KMS-assembly1",
+        "r2p_edges": 529,
+        "p2r_edges": 96
+      },
+      {
+        "sample_id": "8GZQ-assembly1",
+        "r2p_edges": 609,
+        "p2r_edges": 225
+      },
+      {
+        "sample_id": "5WZH-assembly1",
+        "r2p_edges": 512,
+        "p2r_edges": 120
+      },
+      {
+        "sample_id": "1JBT-assembly1",
+        "r2p_edges": 290,
+        "p2r_edges": 157
+      },
+      {
+        "sample_id": "9M33-assembly1",
+        "r2p_edges": 1297,
+        "p2r_edges": 581
+      },
+      {
+        "sample_id": "8E4X-assembly1",
+        "r2p_edges": 861,
+        "p2r_edges": 421
+      },
+      {
+        "sample_id": "8FTI-assembly1",
+        "r2p_edges": 1914,
+        "p2r_edges": 914
+      },
+      {
+        "sample_id": "9NXS-assembly1",
+        "r2p_edges": 768,
+        "p2r_edges": 307
+      },
+      {
+        "sample_id": "3IAB-assembly1",
+        "r2p_edges": 791,
+        "p2r_edges": 381
+      },
+      {
+        "sample_id": "3OVS-assembly1",
+        "r2p_edges": 1342,
+        "p2r_edges": 479
+      },
+      {
+        "sample_id": "5VOE-assembly1",
+        "r2p_edges": 157,
+        "p2r_edges": 65
+      },
+      {
+        "sample_id": "4X2B-assembly1",
+        "r2p_edges": 790,
+        "p2r_edges": 156
+      },
+      {
+        "sample_id": "9ECD-assembly1",
+        "r2p_edges": 1855,
+        "p2r_edges": 713
+      },
+      {
+        "sample_id": "7ACS-assembly1",
+        "r2p_edges": 256,
+        "p2r_edges": 132
+      },
+      {
+        "sample_id": "9JKD-assembly1",
+        "r2p_edges": 1044,
+        "p2r_edges": 252
+      },
+      {
+        "sample_id": "3BSN-assembly1",
+        "r2p_edges": 775,
+        "p2r_edges": 168
+      },
+      {
+        "sample_id": "7BV2-assembly1",
+        "r2p_edges": 905,
+        "p2r_edges": 247
+      },
+      {
+        "sample_id": "1TFW-assembly1",
+        "r2p_edges": 982,
+        "p2r_edges": 344
+      },
+      {
+        "sample_id": "6FQL-assembly1",
+        "r2p_edges": 243,
+        "p2r_edges": 70
+      },
+      {
+        "sample_id": "9KFX-assembly1",
+        "r2p_edges": 1383,
+        "p2r_edges": 204
+      },
+      {
+        "sample_id": "7CTT-assembly1",
+        "r2p_edges": 935,
+        "p2r_edges": 246
+      },
+      {
+        "sample_id": "5HP3-assembly1",
+        "r2p_edges": 651,
+        "p2r_edges": 292
+      },
+      {
+        "sample_id": "3ADB-assembly1",
+        "r2p_edges": 1350,
+        "p2r_edges": 837
+      },
+      {
+        "sample_id": "9M30-assembly1",
+        "r2p_edges": 1934,
+        "p2r_edges": 547
+      },
+      {
+        "sample_id": "6LSH-assembly1",
+        "r2p_edges": 849,
+        "p2r_edges": 219
+      },
+      {
+        "sample_id": "3KTW-assembly1",
+        "r2p_edges": 465,
+        "p2r_edges": 310
+      },
+      {
+        "sample_id": "9I0V-assembly1",
+        "r2p_edges": 678,
+        "p2r_edges": 446
+      },
+      {
+        "sample_id": "2ZHA-assembly1",
+        "r2p_edges": 631,
+        "p2r_edges": 234
+      },
+      {
+        "sample_id": "9NY9-assembly1",
+        "r2p_edges": 764,
+        "p2r_edges": 308
+      },
+      {
+        "sample_id": "7DFG-assembly1",
+        "r2p_edges": 958,
+        "p2r_edges": 266
+      },
+      {
+        "sample_id": "4X4U-assembly1",
+        "r2p_edges": 766,
+        "p2r_edges": 283
+      },
+      {
+        "sample_id": "9ECC-assembly1",
+        "r2p_edges": 1793,
+        "p2r_edges": 629
+      },
+      {
+        "sample_id": "8HIO-assembly1",
+        "r2p_edges": 1398,
+        "p2r_edges": 515
+      },
+      {
+        "sample_id": "7KFN-assembly1",
+        "r2p_edges": 588,
+        "p2r_edges": 267
+      },
+      {
+        "sample_id": "2XDB-assembly1",
+        "r2p_edges": 355,
+        "p2r_edges": 186
+      },
+      {
+        "sample_id": "8UD4-assembly1",
+        "r2p_edges": 677,
+        "p2r_edges": 311
+      },
+      {
+        "sample_id": "4KR6-assembly1",
+        "r2p_edges": 1412,
+        "p2r_edges": 674
+      },
+      {
+        "sample_id": "7OZU-assembly1",
+        "r2p_edges": 801,
+        "p2r_edges": 226
+      },
+      {
+        "sample_id": "4X4P-assembly1",
+        "r2p_edges": 727,
+        "p2r_edges": 283
+      },
+      {
+        "sample_id": "2ZH1-assembly1",
+        "r2p_edges": 599,
+        "p2r_edges": 234
+      },
+      {
+        "sample_id": "5F8I-assembly1",
+        "r2p_edges": 928,
+        "p2r_edges": 240
+      },
+      {
+        "sample_id": "2DR5-assembly1",
+        "r2p_edges": 608,
+        "p2r_edges": 239
+      },
+      {
+        "sample_id": "4IQX-assembly1",
+        "r2p_edges": 675,
+        "p2r_edges": 120
+      },
+      {
+        "sample_id": "9EBU-assembly1",
+        "r2p_edges": 2110,
+        "p2r_edges": 519
+      },
+      {
+        "sample_id": "9SAP-assembly1",
+        "r2p_edges": 741,
+        "p2r_edges": 225
+      },
+      {
+        "sample_id": "5F8J-assembly1",
+        "r2p_edges": 1013,
+        "p2r_edges": 252
+      },
+      {
+        "sample_id": "2ZH7-assembly1",
+        "r2p_edges": 601,
+        "p2r_edges": 236
+      },
+      {
+        "sample_id": "5WZG-assembly1",
+        "r2p_edges": 478,
+        "p2r_edges": 108
+      },
+      {
+        "sample_id": "8H0S-assembly1",
+        "r2p_edges": 296,
+        "p2r_edges": 102
+      },
+      {
+        "sample_id": "9NF8-assembly1",
+        "r2p_edges": 1290,
+        "p2r_edges": 480
+      },
+      {
+        "sample_id": "7B3D-assembly1",
+        "r2p_edges": 875,
+        "p2r_edges": 235
+      },
+      {
+        "sample_id": "4K4S-assembly1",
+        "r2p_edges": 1129,
+        "p2r_edges": 344
+      },
+      {
+        "sample_id": "5Y6Z-assembly1",
+        "r2p_edges": 995,
+        "p2r_edges": 286
+      },
+      {
+        "sample_id": "6KWQ-assembly1",
+        "r2p_edges": 1114,
+        "p2r_edges": 367
+      },
+      {
+        "sample_id": "2ZNI-assembly1",
+        "r2p_edges": 1697,
+        "p2r_edges": 782
+      },
+      {
+        "sample_id": "9LZU-assembly1",
+        "r2p_edges": 1726,
+        "p2r_edges": 616
+      },
+      {
+        "sample_id": "6LSE-assembly1",
+        "r2p_edges": 863,
+        "p2r_edges": 192
+      },
+      {
+        "sample_id": "9ECA-assembly1",
+        "r2p_edges": 1346,
+        "p2r_edges": 519
+      },
+      {
+        "sample_id": "9OP3-assembly1",
+        "r2p_edges": 903,
+        "p2r_edges": 433
+      },
+      {
+        "sample_id": "2ZHB-assembly1",
+        "r2p_edges": 674,
+        "p2r_edges": 248
+      },
+      {
+        "sample_id": "7XD8-assembly1",
+        "r2p_edges": 1004,
+        "p2r_edges": 252
+      },
+      {
+        "sample_id": "2ZH8-assembly1",
+        "r2p_edges": 673,
+        "p2r_edges": 246
+      },
+      {
+        "sample_id": "8VZ6-assembly1",
+        "r2p_edges": 1418,
+        "p2r_edges": 598
+      },
+      {
+        "sample_id": "7OZV-assembly1",
+        "r2p_edges": 804,
+        "p2r_edges": 224
+      },
+      {
+        "sample_id": "4K4X-assembly1",
+        "r2p_edges": 1091,
+        "p2r_edges": 317
+      },
+      {
+        "sample_id": "7V93-assembly1",
+        "r2p_edges": 1528,
+        "p2r_edges": 588
+      },
+      {
+        "sample_id": "4QPX-assembly1",
+        "r2p_edges": 831,
+        "p2r_edges": 156
+      },
+      {
+        "sample_id": "11HX-assembly1",
+        "r2p_edges": 1872,
+        "p2r_edges": 1317
+      },
+      {
+        "sample_id": "5V6X-assembly1",
+        "r2p_edges": 415,
+        "p2r_edges": 305
+      },
+      {
+        "sample_id": "1TFY-assembly1",
+        "r2p_edges": 881,
+        "p2r_edges": 315
+      },
+      {
+        "sample_id": "7VTI-assembly1",
+        "r2p_edges": 1263,
+        "p2r_edges": 451
+      },
+      {
+        "sample_id": "5ED1-assembly1",
+        "r2p_edges": 636,
+        "p2r_edges": 286
+      },
+      {
+        "sample_id": "3KLV-assembly1",
+        "r2p_edges": 617,
+        "p2r_edges": 108
+      },
+      {
+        "sample_id": "7DOI-assembly1",
+        "r2p_edges": 914,
+        "p2r_edges": 254
+      },
+      {
+        "sample_id": "4IG8-assembly1",
+        "r2p_edges": 714,
+        "p2r_edges": 285
+      },
+      {
+        "sample_id": "7W9S-assembly1",
+        "r2p_edges": 922,
+        "p2r_edges": 235
+      },
+      {
+        "sample_id": "6FQ3-assembly1",
+        "r2p_edges": 247,
+        "p2r_edges": 71
+      },
+      {
+        "sample_id": "9ECB-assembly1",
+        "r2p_edges": 1392,
+        "p2r_edges": 513
+      },
+      {
+        "sample_id": "9T74-assembly1",
+        "r2p_edges": 235,
+        "p2r_edges": 134
+      },
+      {
+        "sample_id": "2MQQ-assembly1",
+        "r2p_edges": 376,
+        "p2r_edges": 96
+      },
+      {
+        "sample_id": "8EPK-assembly1",
+        "r2p_edges": 63,
+        "p2r_edges": 51
+      },
+      {
+        "sample_id": "3FTE-assembly1",
+        "r2p_edges": 317,
+        "p2r_edges": 206
+      },
+      {
+        "sample_id": "4KR9-assembly1",
+        "r2p_edges": 1040,
+        "p2r_edges": 580
+      },
+      {
+        "sample_id": "4S3N-assembly1",
+        "r2p_edges": 659,
+        "p2r_edges": 293
+      },
+      {
+        "sample_id": "5JXS-assembly1",
+        "r2p_edges": 807,
+        "p2r_edges": 168
+      },
+      {
+        "sample_id": "6LT7-assembly1",
+        "r2p_edges": 1835,
+        "p2r_edges": 886
+      },
+      {
+        "sample_id": "9M31-assembly1",
+        "r2p_edges": 2118,
+        "p2r_edges": 560
+      },
+      {
+        "sample_id": "6VFF-assembly1",
+        "r2p_edges": 907,
+        "p2r_edges": 432
+      },
+      {
+        "sample_id": "7XWZ-assembly1",
+        "r2p_edges": 213,
+        "p2r_edges": 107
+      },
+      {
+        "sample_id": "5TSN-assembly1",
+        "r2p_edges": 827,
+        "p2r_edges": 156
+      },
+      {
+        "sample_id": "3OUY-assembly1",
+        "r2p_edges": 1529,
+        "p2r_edges": 512
+      },
+      {
+        "sample_id": "9D5K-assembly1",
+        "r2p_edges": 870,
+        "p2r_edges": 428
+      },
+      {
+        "sample_id": "5F8N-assembly1",
+        "r2p_edges": 887,
+        "p2r_edges": 204
+      },
+      {
+        "sample_id": "8BGU-assembly1",
+        "r2p_edges": 1379,
+        "p2r_edges": 745
+      },
+      {
+        "sample_id": "2IX1-assembly1",
+        "r2p_edges": 906,
+        "p2r_edges": 156
+      },
+      {
+        "sample_id": "8GZP-assembly1",
+        "r2p_edges": 596,
+        "p2r_edges": 214
+      },
+      {
+        "sample_id": "3OVB-assembly1",
+        "r2p_edges": 1420,
+        "p2r_edges": 490
+      },
+      {
+        "sample_id": "5F8M-assembly1",
+        "r2p_edges": 1010,
+        "p2r_edges": 244
+      },
+      {
+        "sample_id": "2EC0-assembly1",
+        "r2p_edges": 788,
+        "p2r_edges": 168
+      },
+      {
+        "sample_id": "5WZK-assembly1",
+        "r2p_edges": 432,
+        "p2r_edges": 120
+      },
+      {
+        "sample_id": "5EMO-assembly1",
+        "r2p_edges": 369,
+        "p2r_edges": 144
+      },
+      {
+        "sample_id": "7AAP-assembly1",
+        "r2p_edges": 914,
+        "p2r_edges": 243
+      },
+      {
+        "sample_id": "5WTY-assembly1",
+        "r2p_edges": 435,
+        "p2r_edges": 132
+      },
+      {
+        "sample_id": "9M34-assembly1",
+        "r2p_edges": 1260,
+        "p2r_edges": 569
+      },
+      {
+        "sample_id": "2ZH5-assembly1",
+        "r2p_edges": 676,
+        "p2r_edges": 248
+      },
+      {
+        "sample_id": "4K4Z-assembly1",
+        "r2p_edges": 1100,
+        "p2r_edges": 341
+      },
+      {
+        "sample_id": "9PRC-assembly1",
+        "r2p_edges": 862,
+        "p2r_edges": 587
+      },
+      {
+        "sample_id": "1L1C-assembly1",
+        "r2p_edges": 383,
+        "p2r_edges": 187
+      },
+      {
+        "sample_id": "6E9F-assembly1",
+        "r2p_edges": 2174,
+        "p2r_edges": 814
+      },
+      {
+        "sample_id": "3KMQ-assembly1",
+        "r2p_edges": 608,
+        "p2r_edges": 108
+      },
+      {
+        "sample_id": "5ED2-assembly1",
+        "r2p_edges": 549,
+        "p2r_edges": 272
+      },
+      {
+        "sample_id": "9LZT-assembly1",
+        "r2p_edges": 1940,
+        "p2r_edges": 572
+      },
+      {
+        "sample_id": "4DB2-assembly1",
+        "r2p_edges": 905,
+        "p2r_edges": 312
+      },
+      {
+        "sample_id": "5WZI-assembly1",
+        "r2p_edges": 511,
+        "p2r_edges": 120
+      },
+      {
+        "sample_id": "2G4B-assembly1",
+        "r2p_edges": 509,
+        "p2r_edges": 145
+      },
+      {
+        "sample_id": "5WZJ-assembly1",
+        "r2p_edges": 513,
+        "p2r_edges": 120
+      },
+      {
+        "sample_id": "9SAR-assembly1",
+        "r2p_edges": 865,
+        "p2r_edges": 245
+      },
+      {
+        "sample_id": "9SAO-assembly1",
+        "r2p_edges": 740,
+        "p2r_edges": 223
+      },
+      {
+        "sample_id": "6LSG-assembly1",
+        "r2p_edges": 843,
+        "p2r_edges": 208
+      },
+      {
+        "sample_id": "6XMF-assembly1",
+        "r2p_edges": 1743,
+        "p2r_edges": 762
+      },
+      {
+        "sample_id": "4X4O-assembly1",
+        "r2p_edges": 651,
+        "p2r_edges": 270
+      },
+      {
+        "sample_id": "8I3Q-assembly1",
+        "r2p_edges": 1407,
+        "p2r_edges": 693
+      },
+      {
+        "sample_id": "8E0F-assembly1",
+        "r2p_edges": 897,
+        "p2r_edges": 435
+      }
+    ],
+    "edge_counts_unchanged_across_conditions": true
+  }
+}

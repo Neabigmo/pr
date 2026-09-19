@@ -1,0 +1,325 @@
+{
+  "protocol": {
+    "name": "explicit_dynamic_selection_matrix",
+    "seed": 20260919,
+    "development_complexes": 860,
+    "folds": 3,
+    "variants": [
+      "B1"
+    ],
+    "A0": "locked E0 multiplicative + separate directional edge encoders + modality projectors + learned scalar gates",
+    "A1": "M_ij=C, zero-initialized global 20x4 matrix + learned scalar gates",
+    "A2": "M_ij=C+DeltaC_ij, shared G2 edge encoder and 192-128-80 MLP; output zero initialized",
+    "B1": "M_ij=DeltaC_ij; global C removed, otherwise A2",
+    "B2": "M_ij=C+DeltaC_ij; structural hidden removed, G2 edge-only dynamic input",
+    "B3": "M_ij=C+DeltaC_ij; G2 replaced by G0 distance/RBF geometry",
+    "hidden_contract": "sequence_free_encoder_side; no decoder or teacher-forced target hidden",
+    "geometry": "G2",
+    "radius": 14.979730606,
+    "r2p_k": 8,
+    "p2r_k": 12,
+    "geometry_by_variant": {
+      "B1": "G2"
+    },
+    "loss": "0.5*(LP/LPprior + LR/LRprior)",
+    "selection": "RNA equal-weight Q1-Q4 ratio; hard RP<1 and native<20-shuffle in both directions",
+    "shuffle": "20 fixed composition-preserving global permutations; target labels/masks/geometry/edges fixed",
+    "test_read": false,
+    "old_215_status": "diagnostic_only_never_used_for_selection"
+  },
+  "experiments": {
+    "B1": {
+      "folds": 3,
+      "mean_metrics": {
+        "n_complexes": 286.6666666666667,
+        "partner_use_pass": 1.0,
+        "protein_active_nll": 2.2630728944952954,
+        "protein_active_prior_nll": 2.2966904779000767,
+        "protein_active_ratio": 0.9851780724293026,
+        "protein_all_nll": 2.2002199496379045,
+        "protein_all_prior_nll": 2.2181631229696777,
+        "protein_all_ratio": 0.9917647959163555,
+        "protein_better_fraction": 0.9511992072967682,
+        "protein_hard_pass": 1.0,
+        "protein_interface_nll": 2.4807368442730255,
+        "protein_interface_prior_nll": 2.553372300416068,
+        "protein_interface_ratio": 0.9714868944856626,
+        "protein_native_minus_shuffle_interface_nll": -0.0030239547402282816,
+        "protein_shuffle_interface_nll": 2.483760799013254,
+        "rna_active_nll": 1.0661116022487944,
+        "rna_active_prior_nll": 1.0977001377843685,
+        "rna_active_ratio": 0.9722898726478616,
+        "rna_all_nll": 1.089279543264076,
+        "rna_all_prior_nll": 1.1182901667599057,
+        "rna_all_ratio": 0.9752795856427235,
+        "rna_better_fraction": 0.6511171755074194,
+        "rna_interface_nll": 1.0684536382020782,
+        "rna_interface_prior_nll": 1.1021533815036297,
+        "rna_interface_ratio": 0.9703395915057902,
+        "rna_native_minus_shuffle_interface_nll": -0.0012443127967620333,
+        "rna_q1_n": 72.0,
+        "rna_q1_ratio": 1.015928133106596,
+        "rna_q2_n": 71.66666666666667,
+        "rna_q2_ratio": 0.9889561791404525,
+        "rna_q3_n": 72.0,
+        "rna_q3_ratio": 0.9653527535399945,
+        "rna_q4_n": 71.0,
+        "rna_q4_ratio": 0.9488612938538837,
+        "rna_shuffle_interface_nll": 1.0696979509988402,
+        "rna_stratified_score": 0.9797745899102317,
+        "selection_score": 0.9798094781926809,
+        "selection_valid": 1.0
+      },
+      "fold_summaries": [
+        {
+          "variant": "B1",
+          "fold": 0,
+          "seed": 20260919,
+          "train_complexes": 574,
+          "val_complexes": 286,
+          "epochs_run": 19,
+          "best_epoch": 1,
+          "best_selection_score": 0.9943613623418636,
+          "best_validation": {
+            "n_complexes": 286,
+            "protein_all_nll": 2.235287425818143,
+            "protein_all_prior_nll": 2.2396668739668972,
+            "protein_all_ratio": 0.99804459841789,
+            "protein_active_nll": 2.3039360052638953,
+            "protein_active_prior_nll": 2.3130617441830936,
+            "protein_active_ratio": 0.9960546929012389,
+            "protein_interface_nll": 2.5394083159370022,
+            "protein_interface_prior_nll": 2.5577053046309866,
+            "protein_interface_ratio": 0.9928463264861453,
+            "protein_better_fraction": 0.9825174825174825,
+            "protein_shuffle_interface_nll": 2.5399259872682443,
+            "protein_native_minus_shuffle_interface_nll": -0.0005176713312420311,
+            "rna_all_nll": 0.9420411266855426,
+            "rna_all_prior_nll": 0.9468796615834003,
+            "rna_all_ratio": 0.9948900213045377,
+            "rna_active_nll": 0.9342293110708674,
+            "rna_active_prior_nll": 0.9407615781195097,
+            "rna_active_ratio": 0.9930564053628766,
+            "rna_interface_nll": 0.9562567592813418,
+            "rna_interface_prior_nll": 0.9641149602569901,
+            "rna_interface_ratio": 0.9918493112340528,
+            "rna_better_fraction": 0.6118881118881119,
+            "rna_shuffle_interface_nll": 0.9566740959452894,
+            "rna_native_minus_shuffle_interface_nll": -0.0004173366639476095,
+            "rna_q1_n": 72,
+            "rna_q1_ratio": 1.0023056468598075,
+            "rna_q2_n": 71,
+            "rna_q2_ratio": 0.9949038303123504,
+            "rna_q3_n": 72,
+            "rna_q3_ratio": 0.9951925073742034,
+            "rna_q4_n": 71,
+            "rna_q4_ratio": 0.984888223490075,
+            "rna_stratified_score": 0.9943225520091091,
+            "protein_hard_pass": true,
+            "partner_use_pass": true,
+            "selection_valid": true,
+            "selection_score": 0.9943613631979203
+          },
+          "bootstrap": {
+            "n": 286,
+            "repeats": 10000,
+            "protein_delta_nll_ci95": [
+              -0.01945970070945633,
+              -0.01713686084205454
+            ],
+            "rna_delta_nll_ci95": [
+              -0.010377823325668598,
+              -0.005415924422937882
+            ],
+            "protein_native_minus_shuffle_ci95": [
+              -0.0008169417205703147,
+              -0.00020845243329560036
+            ],
+            "rna_native_minus_shuffle_ci95": [
+              -0.0006269912470874508,
+              -0.0002103034995001288
+            ]
+          },
+          "checkpoint": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold0/best.pt",
+          "last_checkpoint": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold0/last.pt",
+          "validation_per_complex": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold0/validation_per_complex.jsonl",
+          "test_read": false,
+          "protocol": {
+            "geometry": "G2",
+            "radius": 14.979730606,
+            "r2p_k": 8,
+            "p2r_k": 12,
+            "mean_selected_neighbors": true,
+            "shuffle_repeats": 20
+          }
+        },
+        {
+          "variant": "B1",
+          "fold": 1,
+          "seed": 20260919,
+          "train_complexes": 573,
+          "val_complexes": 287,
+          "epochs_run": 28,
+          "best_epoch": 10,
+          "best_selection_score": 0.9691196155424797,
+          "best_validation": {
+            "n_complexes": 287,
+            "protein_all_nll": 2.0656680412824144,
+            "protein_all_prior_nll": 2.096808833527648,
+            "protein_all_ratio": 0.9851484829006358,
+            "protein_active_nll": 2.148281589202349,
+            "protein_active_prior_nll": 2.206496339641797,
+            "protein_active_ratio": 0.9736166566907161,
+            "protein_interface_nll": 2.4007407426834106,
+            "protein_interface_prior_nll": 2.5104979978621214,
+            "protein_interface_ratio": 0.956280684042697,
+            "protein_better_fraction": 0.9372822299651568,
+            "protein_shuffle_interface_nll": 2.4085345443948216,
+            "protein_native_minus_shuffle_interface_nll": -0.007793801711410975,
+            "rna_all_nll": 1.0900495262096153,
+            "rna_all_prior_nll": 1.1373772966944797,
+            "rna_all_ratio": 0.9583886801482573,
+            "rna_active_nll": 1.0381623573004162,
+            "rna_active_prior_nll": 1.08810848807624,
+            "rna_active_ratio": 0.9540982068211528,
+            "rna_interface_nll": 1.0355497187957532,
+            "rna_interface_prior_nll": 1.0890090935425476,
+            "rna_interface_ratio": 0.9509100749812005,
+            "rna_better_fraction": 0.6167247386759582,
+            "rna_shuffle_interface_nll": 1.0360984731478557,
+            "rna_native_minus_shuffle_interface_nll": -0.000548754352102554,
+            "rna_q1_n": 72,
+            "rna_q1_ratio": 1.026233930827693,
+            "rna_q2_n": 72,
+            "rna_q2_ratio": 0.9938117874672932,
+            "rna_q3_n": 72,
+            "rna_q3_ratio": 0.9361767013723542,
+            "rna_q4_n": 71,
+            "rna_q4_ratio": 0.9201027344063201,
+            "rna_stratified_score": 0.9690812885184151,
+            "protein_hard_pass": true,
+            "partner_use_pass": true,
+            "selection_valid": true,
+            "selection_score": 0.9691196160445475
+          },
+          "bootstrap": {
+            "n": 287,
+            "repeats": 10000,
+            "protein_delta_nll_ci95": [
+              -0.11855709638952794,
+              -0.10115664890003537
+            ],
+            "rna_delta_nll_ci95": [
+              -0.06593592210513789,
+              -0.04107513304553174
+            ],
+            "protein_native_minus_shuffle_ci95": [
+              -0.01072104396253097,
+              -0.004873474960958501
+            ],
+            "rna_native_minus_shuffle_ci95": [
+              -0.003988369872813018,
+              0.002905941869907781
+            ]
+          },
+          "checkpoint": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold1/best.pt",
+          "last_checkpoint": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold1/last.pt",
+          "validation_per_complex": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold1/validation_per_complex.jsonl",
+          "test_read": false,
+          "protocol": {
+            "geometry": "G2",
+            "radius": 14.979730606,
+            "r2p_k": 8,
+            "p2r_k": 12,
+            "mean_selected_neighbors": true,
+            "shuffle_repeats": 20
+          }
+        },
+        {
+          "variant": "B1",
+          "fold": 2,
+          "seed": 20260919,
+          "train_complexes": 573,
+          "val_complexes": 287,
+          "epochs_run": 22,
+          "best_epoch": 4,
+          "best_selection_score": 0.9759474539178213,
+          "best_validation": {
+            "n_complexes": 287,
+            "protein_all_nll": 2.2997043818131555,
+            "protein_all_prior_nll": 2.3180136614144886,
+            "protein_all_ratio": 0.9921013064305408,
+            "protein_active_nll": 2.3370010890196427,
+            "protein_active_prior_nll": 2.3705133498753406,
+            "protein_active_ratio": 0.9858628676959528,
+            "protein_interface_nll": 2.5020614741986638,
+            "protein_interface_prior_nll": 2.5919135987550956,
+            "protein_interface_ratio": 0.9653336729281454,
+            "protein_better_fraction": 0.9337979094076655,
+            "protein_shuffle_interface_nll": 2.5028218653766956,
+            "protein_native_minus_shuffle_interface_nll": -0.0007603911780318384,
+            "rna_all_nll": 1.2357479768970703,
+            "rna_all_prior_nll": 1.2706135420018372,
+            "rna_all_ratio": 0.9725600554753756,
+            "rna_active_nll": 1.2259431383750996,
+            "rna_active_prior_nll": 1.2642303471573555,
+            "rna_active_ratio": 0.9697150057595553,
+            "rna_interface_nll": 1.2135544365291395,
+            "rna_interface_prior_nll": 1.253336090711351,
+            "rna_interface_ratio": 0.9682593883021171,
+            "rna_better_fraction": 0.7247386759581882,
+            "rna_shuffle_interface_nll": 1.2163212839033755,
+            "rna_native_minus_shuffle_interface_nll": -0.0027668473742359367,
+            "rna_q1_n": 72,
+            "rna_q1_ratio": 1.0192448216322867,
+            "rna_q2_n": 72,
+            "rna_q2_ratio": 0.9781529196417141,
+            "rna_q3_n": 72,
+            "rna_q3_ratio": 0.9646890518734261,
+            "rna_q4_n": 71,
+            "rna_q4_ratio": 0.941592923665256,
+            "rna_stratified_score": 0.9759199292031708,
+            "protein_hard_pass": true,
+            "partner_use_pass": true,
+            "selection_valid": true,
+            "selection_score": 0.975947455335575
+          },
+          "bootstrap": {
+            "n": 287,
+            "repeats": 10000,
+            "protein_delta_nll_ci95": [
+              -0.09716077284945843,
+              -0.08256905194151277
+            ],
+            "rna_delta_nll_ci95": [
+              -0.05139906963119316,
+              -0.028371937578148133
+            ],
+            "protein_native_minus_shuffle_ci95": [
+              -0.002102930578516741,
+              0.0005372561239199333
+            ],
+            "rna_native_minus_shuffle_ci95": [
+              -0.0045820271646934965,
+              -0.0010087313447212506
+            ]
+          },
+          "checkpoint": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold2/best.pt",
+          "last_checkpoint": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold2/last.pt",
+          "validation_per_complex": "/root/autodl-tmp/pr_pilot_20260919/reports/ablation_B1/B1/fold2/validation_per_complex.jsonl",
+          "test_read": false,
+          "protocol": {
+            "geometry": "G2",
+            "radius": 14.979730606,
+            "r2p_k": 8,
+            "p2r_k": 12,
+            "mean_selected_neighbors": true,
+            "shuffle_repeats": 20
+          }
+        }
+      ]
+    }
+  },
+  "comparisons": {},
+  "test_read": false
+}

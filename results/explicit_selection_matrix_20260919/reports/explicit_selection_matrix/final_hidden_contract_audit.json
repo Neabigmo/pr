@@ -1,0 +1,23 @@
+{
+  "contract": "sequence_free_encoder_side",
+  "passed": true,
+  "evidence": {
+    "protein_encoder_calls_features_without_sequence": true,
+    "protein_structure_only_helper_exists": true,
+    "protein_encoder_decoder_not_used": true,
+    "na_encoder_calls_geometry_features": true,
+    "na_feature_forward_does_not_read_sequence": true,
+    "cache_hidden_dim_protein": true,
+    "cache_hidden_dim_rna": true,
+    "cache_metadata_hidden_contract": true,
+    "cache_metadata_no_test_used": true
+  },
+  "sample_id": "9J5O-assembly1",
+  "sample_cache": "I:\\PR_PILOT_SCIENTIFIC\\20260919\\cache\\g2_structure_only\\train\\007bae9f96a141ea9b95_9J5O-assembly1.pt",
+  "source_hashes": {
+    "I:\\PR_PILOT_SCIENTIFIC\\20260919\\worktree_explicit_matrix\\src\\pr_pilot\\adapter_pilot\\priors.py": "215eb18f12a57fef05c67b0fc70f78337bac1bd76dee759ffc6189ccef10778c",
+    "F:\\111临时\\PR PILOT\\third_party_checkouts_local_20260907\\NA-MPNN\\inference\\model_utils.py": "bd5a12ae73e8fb310a1e969779ad39d440ba4cd8d6a9c28f7b939b6c4bc0bdeb"
+  },
+  "test_read": false,
+  "note": "The cache stores encoder hidden states produced by the pinned prior wrappers; A2 never receives decoder or teacher-forced hidden states."
+}

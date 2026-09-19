@@ -270,9 +270,9 @@ def _train_fold(spec: dict, fold: dict, by_id: dict[str, Path], args: argparse.N
         selector_spec["rna_entropy_tau"] = 1.0
     selector = ReciprocalAdapter(_config(selector_spec))
 
-    def load_payload(sample_id: str) -> dict:
+    def load_payload(sample_id: str, geometry_selector: ReciprocalAdapter = selector) -> dict:
         payload = _load_fold_payload(by_id[sample_id])
-        geometry = selector._select_geometry(payload["edge_geometry"])
+        geometry = geometry_selector._select_geometry(payload["edge_geometry"])
         payload["edge_geometry"] = geometry.contiguous() if geometry.shape[-1] < payload["edge_geometry"].shape[-1] else geometry
         return payload
 
