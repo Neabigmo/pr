@@ -61,6 +61,9 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--result-root", type=Path, default=OUT)
+    parser.add_argument("--cache-root", type=Path, default=DEV_CACHE)
+    parser.add_argument("--blind-manifest", type=Path)
+    parser.add_argument("--seed", type=int, default=SEED)
     args = parser.parse_args()
 
     result_root = Path(args.result_root)
@@ -84,10 +87,13 @@ def main() -> None:
         return
 
     device = torch.device(args.device)
-    _seed_everything(SEED)
-    data = _load_cache(DEV_CACHE, "train") + _load_cache(DEV_CACHE, "val")
-    if len(data) != 991:
-        raise ValueError(f"expected 991 development complexes, found {len(data)}")
+    seed = int(args.seed)
+    _seed_everything(seed)
+    cache_root = Path(args.cache_root)
+    data = _load_cache(cache_root, "train") + _load_cache(cache_root, "val")
+    expected_development = int(json.loads((Path(args.result_root) / "protocol.json").read_text(encoding="utf-8")).get("development_complexes", len(data))) if (Path(args.result_root) / "protocol.json").exists() else len(data)
+    if len(data) != expected_development:
+        raise ValueError(f"expected {expected_development} development complexes, found {len(data)}")
     _attach_selected_edges(data, RADIUS, NEIGHBORS, R2P_K, P2R_K, True)
     if spec["rna_gate_mode"] == "entropy_threshold_scalar":
         spec["rna_entropy_tau"] = _training_entropy_tau(data)
@@ -105,7 +111,7 @@ def main() -> None:
     start_epoch = 1
     if args.resume and (target / "last.pt").exists():
         start_epoch = manager.restore_last(model, optimizer, map_location=device)
-    order_rng = random.Random(SEED)
+    order_rng = random.Random(seed)
     _advance_sampling_rng(order_rng, len(data), start_epoch - 1, weights)
     history: list[dict] = []
     for epoch in range(start_epoch, epochs + 1):
@@ -144,15 +150,15 @@ def main() -> None:
             "train_complexes_per_second": len(data) / max(seconds, 1e-8),
             "peak_gpu_memory_mb": float(torch.cuda.max_memory_allocated(device) / (1024 ** 2)) if device.type == "cuda" else 0.0,
         }
-        manager.save_epoch(model, optimizer, None, epoch, {k: v for k, v in record.items() if k != "epoch"}, {"spec": spec, "seed": SEED, "refit": True, "sampler": sampler_report})
+        manager.save_epoch(model, optimizer, None, epoch, {k: v for k, v in record.items() if k != "epoch"}, {"spec": spec, "seed": seed, "refit": True, "sampler": sampler_report})
         history.append(record)
         print(json.dumps({"event": "refit_epoch", **record}, default=_json_default), flush=True)
 
-    final = manager.save_final(model, epochs, history[-1], {"spec": spec, "seed": SEED, "refit": True, "sampler": sampler_report})
+    final = manager.save_final(model, epochs, history[-1], {"spec": spec, "seed": seed, "refit": True, "sampler": sampler_report})
     summary = {
         "selected_experiment": selected_name,
         "spec": spec,
-        "seed": SEED,
+        "seed": seed,
         "development_complexes": len(data),
         "cv_best_epochs": best_epochs,
         "refit_epochs": epochs,
@@ -163,6 +169,7 @@ def main() -> None:
         "test_read": False,
         "blind_read": False,
         "selection_source": str(cv_path),
+        "cache_root": str(cache_root),
         "sampler": sampler_report,
     }
     target.mkdir(parents=True, exist_ok=True)
@@ -173,10 +180,10 @@ def main() -> None:
         "final_checkpoint": str(final),
         "test_read": False,
         "blind_read": False,
-        "new_blind_manifest": str(OUT / "blind_freeze" / "blind_manifest" / "complex_test.tsv"),
-        "new_blind_status": "locked_empty_due_to_leakage_audit",
+        "new_blind_manifest": str(args.blind_manifest) if args.blind_manifest else None,
+        "new_blind_status": "locked_not_read_before_final_evaluation" if args.blind_manifest else "not_declared",
     }
-    (OUT / "final_lock.json").write_text(json.dumps(lock, indent=2, ensure_ascii=False, default=_json_default), encoding="utf-8")
+    (result_root / "final_lock.json").write_text(json.dumps(lock, indent=2, ensure_ascii=False, default=_json_default), encoding="utf-8")
     print(json.dumps({"event": "refit_complete", **lock}, default=_json_default), flush=True)
 
 

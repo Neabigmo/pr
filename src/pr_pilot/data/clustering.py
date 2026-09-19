@@ -106,7 +106,8 @@ def prepare_rfam_database(rfam_cm_gz: Path, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     cm = out_dir / "Rfam.cm"
     if not cm.exists():
-        with gzip.open(rfam_cm_gz, "rb") as src, cm.open("wb") as dst:
+        opener = gzip.open if str(rfam_cm_gz).lower().endswith(".gz") else open
+        with opener(rfam_cm_gz, "rb") as src, cm.open("wb") as dst:
             shutil.copyfileobj(src, dst)
     indexes = [Path(str(cm) + suffix) for suffix in (".i1f", ".i1i", ".i1m", ".i1p")]
     if not all(p.exists() for p in indexes):
