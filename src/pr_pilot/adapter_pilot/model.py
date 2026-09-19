@@ -31,6 +31,7 @@ class AdapterConfig:
     conservative_gate: bool = False
     gate_init: float = 0.1
     rna_gate_mode: str = "baseline"
+    rna_entropy_tau: float | None = None
 
 
 def _mlp(input_dim: int, output_dim: int, layers: int, dropout: float) -> nn.Sequential:
@@ -289,7 +290,10 @@ class ReciprocalAdapter(nn.Module):
             residual=residual,
         )
         rna_gate_mode = str(self.config.rna_gate_mode)
-        if rna_gate_mode not in {"baseline", "fixed_quarter", "capped_quarter", "entropy_scaled"}:
+        if rna_gate_mode not in {
+            "baseline", "fixed_quarter", "capped_quarter", "entropy_scaled",
+            "entropy_scalar", "entropy_threshold_scalar",
+        }:
             raise ValueError(f"unknown rna_gate_mode {rna_gate_mode}")
         rna_gate_scale = 0.25 if rna_gate_mode == "capped_quarter" else 1.0
         rna_fixed_gate = 0.25 if rna_gate_mode == "fixed_quarter" else None
@@ -297,9 +301,9 @@ class ReciprocalAdapter(nn.Module):
             direction_hidden_dim, self.config.token_dim, self.config.edge_dim, self.config.message_dim,
             4, 20, self.config.aggregation, self.config.layers, self.config.dropout, **direction_args,
         )
-        # Entropy-scaled RNA residuals deliberately remove the learned scalar
-        # gate.  The prior uncertainty is the only position-wise gate; the
-        # Protein direction keeps the registered scalar-gate configuration.
+        # The original entropy experiment deliberately removed the learned
+        # scalar gate.  E4/E5 retain it and apply entropy only as an additional
+        # multiplicative factor after the learned gate.
         rna_direction_args = dict(direction_args)
         if rna_gate_mode == "entropy_scaled":
             rna_direction_args["residual"] = "direct"
@@ -310,6 +314,9 @@ class ReciprocalAdapter(nn.Module):
             gate_scale=rna_gate_scale, fixed_gate=rna_fixed_gate, **rna_direction_args,
         )
         self.rna_gate_mode = rna_gate_mode
+        self.rna_entropy_tau = self.config.rna_entropy_tau
+        if rna_gate_mode == "entropy_threshold_scalar" and (self.rna_entropy_tau is None or self.rna_entropy_tau <= 0.0):
+            raise ValueError("entropy_threshold_scalar requires a positive rna_entropy_tau")
 
     def _select_geometry(self, full_geometry: Tensor) -> Tensor:
         bins = self.config.rbf_bins
@@ -383,14 +390,18 @@ class ReciprocalAdapter(nn.Module):
         p_details = self._residual("protein", p_h_input, r_h_input, p_tokens, r_tokens, edge_index_r2p, edge_geometry_r2p, token_off, protein_known, rna_known)
         r_details = self._residual("rna", p_h_input, r_h_input, p_tokens, r_tokens, edge_index_p2r, edge_geometry_p2r, token_off, protein_known, rna_known)
         p_delta, r_delta = p_details["delta"], r_details["delta"]
-        if self.rna_gate_mode == "entropy_scaled":
+        if self.rna_gate_mode in {"entropy_scaled", "entropy_scalar", "entropy_threshold_scalar"}:
             # r_base is the frozen prior log-probability over A/U/G/C.
-            # Entropy is normalized by log(4), so the gate is in [0, 1].
             prior_prob = r_base.exp().clamp_min(torch.finfo(r_base.dtype).tiny)
             entropy = -(prior_prob * r_base).sum(dim=-1)
-            entropy_gate = entropy.div(math.log(4.0)).clamp(0.0, 1.0)
+            if self.rna_gate_mode == "entropy_threshold_scalar":
+                entropy_gate = (entropy / float(self.rna_entropy_tau)).clamp(max=1.0)
+            else:
+                # E1/E3 use the normalized prior entropy directly; E4 uses
+                # this same factor on top of the learned scalar gate.
+                entropy_gate = entropy.div(math.log(4.0)).clamp(0.0, 1.0)
             r_delta = r_delta * entropy_gate.unsqueeze(-1)
-            r_gate = entropy_gate
+            r_gate = r_details["gate"] * entropy_gate if self.rna_gate_mode != "entropy_scaled" else entropy_gate
         else:
             r_gate = r_details["gate"]
         return {

@@ -93,6 +93,7 @@ def _config(spec: dict) -> AdapterConfig:
         conservative_gate=residual == "scalar_gate",
         gate_init=0.1,
         rna_gate_mode=str(spec.get("rna_gate_mode", "baseline")),
+        rna_entropy_tau=(None if spec.get("rna_entropy_tau") is None else float(spec["rna_entropy_tau"])),
     )
 
 

@@ -149,6 +149,21 @@ def _balanced_weights(train_data: list[dict]) -> tuple[np.ndarray, dict]:
     return weights, report
 
 
+def _training_entropy_tau(train_data: list[dict]) -> float:
+    """Return the raw prior-entropy median for one training fold."""
+    values: list[torch.Tensor] = []
+    for payload in train_data:
+        log_probs = payload["rna_base"].detach().float()
+        probabilities = log_probs.exp().clamp_min(torch.finfo(log_probs.dtype).tiny)
+        values.append((-(probabilities * log_probs).sum(dim=-1)).cpu())
+    if not values:
+        raise ValueError("cannot compute entropy tau from an empty training fold")
+    tau = float(torch.cat(values).median().item())
+    if not np.isfinite(tau) or tau <= 0.0:
+        raise ValueError(f"invalid training entropy tau: {tau}")
+    return tau
+
+
 def _nll(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     return -F.log_softmax(logits, dim=-1).gather(1, labels[:, None]).squeeze(1)
 
@@ -247,7 +262,13 @@ def _advance_sampling_rng(rng: random.Random, count: int, epochs: int, weights: 
 def _train_fold(spec: dict, fold: dict, by_id: dict[str, Path], args: argparse.Namespace, target: Path) -> dict:
     seed = int(args.seed)
     _seed_everything(seed)
-    selector = ReciprocalAdapter(_config(spec))
+    fold_spec = dict(spec)
+    selector_spec = dict(fold_spec)
+    if selector_spec["rna_gate_mode"] == "entropy_threshold_scalar":
+        # The selector is used only to trim cached geometry before tau is
+        # computed from this fold's training residues.
+        selector_spec["rna_entropy_tau"] = 1.0
+    selector = ReciprocalAdapter(_config(selector_spec))
 
     def load_payload(sample_id: str) -> dict:
         payload = _load_fold_payload(by_id[sample_id])
@@ -258,6 +279,8 @@ def _train_fold(spec: dict, fold: dict, by_id: dict[str, Path], args: argparse.N
     train_data = [load_payload(sample_id) for sample_id in fold["train_sample_ids"]]
     val_data = [load_payload(sample_id) for sample_id in fold["val_sample_ids"]]
     del selector
+    if fold_spec["rna_gate_mode"] == "entropy_threshold_scalar":
+        fold_spec["rna_entropy_tau"] = _training_entropy_tau(train_data)
     _attach_selected_edges(train_data, RADIUS, NEIGHBORS, R2P_K, P2R_K, True)
     _attach_selected_edges(val_data, RADIUS, NEIGHBORS, R2P_K, P2R_K, True)
     weights = None
@@ -266,7 +289,7 @@ def _train_fold(spec: dict, fold: dict, by_id: dict[str, Path], args: argparse.N
         weights, sampler_report = _balanced_weights(train_data)
         sampler_report["enabled"] = True
 
-    model = ReciprocalAdapter(_config(spec)).to(args.device)
+    model = ReciprocalAdapter(_config(fold_spec)).to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.lr), weight_decay=1e-3)
     manager = CheckpointManager(target, "selection_score")
     start_epoch = 1
@@ -312,7 +335,7 @@ def _train_fold(spec: dict, fold: dict, by_id: dict[str, Path], args: argparse.N
             "peak_gpu_memory_mb": float(torch.cuda.max_memory_allocated(args.device) / (1024 ** 2)) if args.device.type == "cuda" else 0.0,
         })
         metadata = {
-            "spec": spec,
+            "spec": fold_spec,
             "fold": int(fold["fold"]),
             "seed": seed,
             "r2p_k": R2P_K,
@@ -337,7 +360,7 @@ def _train_fold(spec: dict, fold: dict, by_id: dict[str, Path], args: argparse.N
     detailed = evaluate_detailed(model, val_data, args.device, include_shuffle=True)
     summary = {
         "experiment": spec["name"],
-        "spec": spec,
+        "spec": fold_spec,
         "fold": int(fold["fold"]),
         "seed": seed,
         "train_complexes": len(train_data),

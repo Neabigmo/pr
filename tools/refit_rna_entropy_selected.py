@@ -32,7 +32,6 @@ from run_rna_entropy_balance import (
     BATCH_SIZE,
     DEV_CACHE,
     EPOCHS,
-    EXPERIMENTS,
     NEIGHBORS,
     OUT,
     R2P_K,
@@ -42,6 +41,7 @@ from run_rna_entropy_balance import (
     _advance_sampling_rng,
     _balanced_weights,
     _config,
+    _training_entropy_tau,
     build_spec,
     _seed_everything,
 )
@@ -60,22 +60,24 @@ def main() -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--result-root", type=Path, default=OUT)
     args = parser.parse_args()
 
-    cv_path = OUT / "cv_summary.json"
+    result_root = Path(args.result_root)
+    cv_path = result_root / "cv_summary.json"
     if not cv_path.exists():
         raise FileNotFoundError(cv_path)
     cv = json.loads(cv_path.read_text(encoding="utf-8"))
     selected_name = str(cv["selected_experiment"])
-    if selected_name not in EXPERIMENTS:
-        raise ValueError(f"unknown selected experiment: {selected_name}")
     group = cv["groups"][selected_name]
     best_epochs = [int(fold["best_epoch"]) for fold in group["folds"]]
     epochs = max(1, int(round(float(np.median(best_epochs)))))
-    spec = build_spec(selected_name)
+    # Use the exact locked group specification.  This also supports E4/E5,
+    # which live in a separate result root from the original E0--E3 run.
+    spec = dict(group["spec"])
     spec["name"] = selected_name
 
-    target = OUT / "refit" / selected_name
+    target = result_root / "refit" / selected_name
     summary_path = target / "summary.json"
     if summary_path.exists() and not args.force:
         print(summary_path.read_text(encoding="utf-8"), flush=True)
@@ -87,6 +89,8 @@ def main() -> None:
     if len(data) != 991:
         raise ValueError(f"expected 991 development complexes, found {len(data)}")
     _attach_selected_edges(data, RADIUS, NEIGHBORS, R2P_K, P2R_K, True)
+    if spec["rna_gate_mode"] == "entropy_threshold_scalar":
+        spec["rna_entropy_tau"] = _training_entropy_tau(data)
 
     weights = None
     sampler_report = {"enabled": bool(spec["balanced_sampling"]), "refit": True}

@@ -61,3 +61,39 @@ def test_entropy_scaled_rna_gate_removes_scalar_gate_and_uses_prior_entropy():
     assert torch.all(output["rna_gate"] <= 1.0)
     assert float(output["rna_gate"][0]) > float(output["rna_gate"][1])
     assert torch.allclose(output["rna_logits"] - rna_base, output["rna_delta"])
+
+
+def test_entropy_scalar_keeps_learned_gate_and_only_suppresses_it():
+    model = ReciprocalAdapter(_config("entropy_scalar"))
+    assert hasattr(model.p2r, "gate_logit")
+    assert abs(float(model.p2r._gate(torch.zeros(1))) - 0.1) < 1e-6
+
+    protein_base = torch.log_softmax(torch.randn(3, 20), dim=-1)
+    rna_base = torch.log_softmax(torch.tensor([[0.0, 0.0, 0.0, 0.0], [8.0, -8.0, -8.0, -8.0]]), dim=-1)
+    output = model(
+        protein_base, rna_base, torch.randn(3, 128), torch.randn(2, 128),
+        torch.tensor([0, 1, 2]), torch.tensor([0, 1]),
+        torch.tensor([[0, 1], [0, 1]]), torch.randn(2, 114),
+        torch.tensor([[0, 1], [0, 1]]), torch.randn(2, 114),
+    )
+    assert float(output["rna_gate"][0]) > float(output["rna_gate"][1])
+    assert float(output["rna_gate"].max()) <= 0.1 + 1e-6
+
+
+def test_entropy_threshold_scalar_restores_full_e0_gate_above_tau():
+    model = ReciprocalAdapter(AdapterConfig(
+        geometry="G2", aggregation="A0", interaction="multiplicative", residual="scalar_gate",
+        separate_edge_encoders=True, sequence_independent_attention=True, modality_projector=True,
+        rna_gate_mode="entropy_threshold_scalar", rna_entropy_tau=1.0,
+    ))
+    assert hasattr(model.p2r, "gate_logit")
+    protein_base = torch.log_softmax(torch.randn(3, 20), dim=-1)
+    rna_base = torch.log_softmax(torch.tensor([[0.0, 0.0, 0.0, 0.0], [8.0, -8.0, -8.0, -8.0]]), dim=-1)
+    output = model(
+        protein_base, rna_base, torch.randn(3, 128), torch.randn(2, 128),
+        torch.tensor([0, 1, 2]), torch.tensor([0, 1]),
+        torch.tensor([[0, 1], [0, 1]]), torch.randn(2, 114),
+        torch.tensor([[0, 1], [0, 1]]), torch.randn(2, 114),
+    )
+    assert float(output["rna_gate"][0]) > float(output["rna_gate"][1])
+    assert abs(float(output["rna_gate"][0]) - 0.1) < 1e-5
